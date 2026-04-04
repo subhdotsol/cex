@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rdkafka = { version = "0.36", features = ["tokio"] }
+sqlx = { version = "0.8", features = [
+    "postgres",
+    "runtime-tokio",
+    "uuid",
+    "time",
+] }
+redis = { version = "0.26", features = ["tokio-comp"] }
+deadpool-redis = "0.15"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+anyhow = "1"
