@@ -7,9 +7,10 @@ This repository contains a high performance centralized exchange backend impleme
 The system is built around deterministic processing, minimal latency in the matching path, and clear separation of responsibilities between services. Critical trading logic is kept in memory for speed, while persistence and downstream processing are handled asynchronously through event streams.
 
 ## System Architecture
-
+<img width="1675" height="1148" alt="image" src="https://github.com/user-attachments/assets/2d33510d-4e59-4915-8397-e6ef861dcf75" />
 
 ## Schema
+<img width="950" height="728" alt="Screenshot 2026-04-04 at 6 19 11 PM" src="https://github.com/user-attachments/assets/dad39610-bc16-4411-887f-7f4f1354abb1" />
 
 
 ### Client Layer
