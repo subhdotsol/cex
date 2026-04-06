@@ -48,6 +48,22 @@ pub fn generate_tokens(user_id: Uuid, secret: &str) -> Result<TokenBundle> {
     })
 }
 
+pub fn generate_access_token(user_id: Uuid, secret: &str) -> Result<(String, u64)> {
+    let access_exp = Utc::now() + Duration::seconds(3600);
+    let access_claims = Claims {
+        sub: user_id,
+        exp: access_exp.timestamp(),
+    };
+
+    let access_token = encode(
+        &Header::default(),
+        &access_claims,
+        &EncodingKey::from_secret(secret.as_ref()),
+    )?;
+
+    Ok((access_token, 3600))
+}
+
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims> {
     let token_data = decode::<Claims>(
         token,
