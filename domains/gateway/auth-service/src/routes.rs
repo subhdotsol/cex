@@ -2,11 +2,19 @@ use actix_web::{HttpResponse, Responder, post, web};
 use bcrypt::{hash, verify};
 use chrono::Utc;
 use sqlx::PgPool;
-use types::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse};
+use types::{
+    LoginRequest, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, RegisterRequest,
+    RegisterResponse,
+};
 use uuid::Uuid;
 
 pub fn init(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/auth").service(register).service(login));
+    cfg.service(
+        web::scope("/auth")
+            .service(register)
+            .service(login)
+            .service(refresh),
+    );
 }
 
 #[post("/register")]
@@ -77,6 +85,32 @@ async fn login(pool: web::Data<PgPool>, req: web::Json<LoginRequest>) -> impl Re
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
+    };
+
+    HttpResponse::Ok().json(response)
+}
+
+#[post("/refresh")]
+async fn refresh(req: web::Json<RefreshTokenRequest>) -> impl Responder {
+    let claims = match utils::verify_token(&req.refresh_token, "secret") {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Refresh token verification failed: {:?}", e);
+            return HttpResponse::Unauthorized().body("expired or invalid refresh token");
+        }
+    };
+
+    let (access_token, expires_in) = match utils::generate_access_token(claims.sub, "secret") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Access token generation failed: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let response = RefreshTokenResponse {
+        access_token,
+        expires_in,
     };
 
     HttpResponse::Ok().json(response)
