@@ -1,0 +1,25 @@
+
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: cex-postgres
+    restart: unless-stopped
+    
+    environment:
+      - POSTGRES_USER=cex_user
+      - POSTGRES_PASSWORD=cex_password 
+      - POSTGRES_DB=cex_db
+
+    ports : 
+      - "5432:5432"
+    volumes : 
+      - postgres_data:/var/lib/postgresql/data
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cex_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  postgres_data : 
