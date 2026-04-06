@@ -12,6 +12,8 @@ The system is built around deterministic processing, minimal latency in the matc
 ## Schema
 <img width="950" height="728" alt="Screenshot 2026-04-04 at 6 19 11 PM" src="https://github.com/user-attachments/assets/dad39610-bc16-4411-887f-7f4f1354abb1" />
 
+## CEX API endpoints
+[api-endpoints](https://subhisgreat.notion.site/CEX-api-endpoints-33917f1447c180e8af7ffc0fc620f9b5)
 
 ### Client Layer
 A web user interface built with Next.js interacts with the backend through a secured API gateway. All requests pass through authentication and rate limiting before entering internal services.
