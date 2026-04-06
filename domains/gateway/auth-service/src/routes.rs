@@ -1,19 +1,24 @@
 use actix_web::{HttpResponse, Responder, post, web};
-use bcrypt::hash;
-use chrono::Utc;
+use bcrypt::{hash, verify};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{Header, encode, EncodingKey};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use types::{LoginRequest, RegisterRequest, RegisterResponse};
+use types::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse};
 use uuid::Uuid;
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: Uuid,
+    exp: i64,
+}
+
 pub fn init(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/auth").service(register));
+    cfg.service(web::scope("/auth").service(register).service(login));
 }
 
 #[post("/register")]
-async fn register(
-    pool: web::Data<PgPool>,
-    req: web::Json<RegisterRequest>,
-) -> impl Responder {
+async fn register(pool: web::Data<PgPool>, req: web::Json<RegisterRequest>) -> impl Responder {
     if req.password.len() < 8 {
         return HttpResponse::BadRequest().body("password too short");
     }
@@ -44,31 +49,59 @@ async fn register(
     HttpResponse::Ok().json(response)
 }
 
-
 #[post("/login")]
-async fn login(req: web::Json<LoginRequest>) -> impl Responder {
-    if req.password.len() < 8 {
-        return HttpResponse::BadRequest().body("password too short");
-    }
-
+async fn login(pool: web::Data<PgPool>, req: web::Json<LoginRequest>) -> impl Responder {
     if !req.email.contains('@') || !req.email.contains('.') {
         return HttpResponse::BadRequest().body("invalid email format");
     }
 
-    if req.email == "conflict@example.com" {
-        return HttpResponse::Conflict().body("email already registered");
-    }
+    let user = match db::users::get_user_by_email(&pool, &req.email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return HttpResponse::Unauthorized().body("Invalid credentials"),
+        Err(e) => {
+            eprintln!("Db error : {:?}", e);
+            return HttpResponse::InternalServerError().body("Internal server error");
+        }
+    };
 
-    let cost = 12;
-    let _hashed_password = match hash(&req.password, cost) {
-        Ok(h) => h,
+    let valid = match verify(&req.password, &user.password) {
+        Ok(v) => v,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
-    let response = RegisterResponse {
-        user_id: Uuid::new_v4(),
-        email: req.email.clone(),
-        created_at: Utc::now(),
+    if !valid {
+        return HttpResponse::Unauthorized().body("Invalid credentials");
+    }
+
+    let access_exp = Utc::now() + Duration::seconds(3600);
+    let refresh_exp = Utc::now() + Duration::days(30);
+
+    let access_claims = Claims {
+        sub: user.id,
+        exp: access_exp.timestamp(),
+    };
+    let refresh_claims = Claims {
+        sub: user.id,
+        exp: refresh_exp.timestamp(),
+    };
+
+    let access_token = encode(
+        &Header::default(),
+        &access_claims,
+        &EncodingKey::from_secret("secret".as_ref()),
+    )
+    .unwrap();
+    let refresh_token = encode(
+        &Header::default(),
+        &refresh_claims,
+        &EncodingKey::from_secret("secret".as_ref()),
+    )
+    .unwrap();
+
+    let response = LoginResponse {
+        access_token,
+        refresh_token,
+        expires_in: 3600,
     };
 
     HttpResponse::Ok().json(response)
