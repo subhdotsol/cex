@@ -27,3 +27,14 @@ pub struct LoginResponse {
     pub refresh_token: String,
     pub expires_in: u64,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RefreshTokenResponse {
+    pub access_token: String,
+    pub expires_in: u64,
+}
