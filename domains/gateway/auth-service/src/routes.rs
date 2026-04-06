@@ -1,17 +1,9 @@
 use actix_web::{HttpResponse, Responder, post, web};
 use bcrypt::{hash, verify};
-use chrono::{Duration, Utc};
-use jsonwebtoken::{Header, encode, EncodingKey};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 use sqlx::PgPool;
 use types::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse};
 use uuid::Uuid;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: Uuid,
-    exp: i64,
-}
 
 pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(web::scope("/auth").service(register).service(login));
@@ -73,35 +65,18 @@ async fn login(pool: web::Data<PgPool>, req: web::Json<LoginRequest>) -> impl Re
         return HttpResponse::Unauthorized().body("Invalid credentials");
     }
 
-    let access_exp = Utc::now() + Duration::seconds(3600);
-    let refresh_exp = Utc::now() + Duration::days(30);
-
-    let access_claims = Claims {
-        sub: user.id,
-        exp: access_exp.timestamp(),
+    let tokens = match utils::generate_tokens(user.id, "secret") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Token generation error: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
     };
-    let refresh_claims = Claims {
-        sub: user.id,
-        exp: refresh_exp.timestamp(),
-    };
-
-    let access_token = encode(
-        &Header::default(),
-        &access_claims,
-        &EncodingKey::from_secret("secret".as_ref()),
-    )
-    .unwrap();
-    let refresh_token = encode(
-        &Header::default(),
-        &refresh_claims,
-        &EncodingKey::from_secret("secret".as_ref()),
-    )
-    .unwrap();
 
     let response = LoginResponse {
-        access_token,
-        refresh_token,
-        expires_in: 3600,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_in: tokens.expires_in,
     };
 
     HttpResponse::Ok().json(response)
