@@ -1,14 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RegisterResponse {
+    pub user_id: Uuid,
+    pub email: String,
+    pub created_at: DateTime<Utc>,
 }
