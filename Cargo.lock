@@ -246,7 +246,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "auth"
+name = "auth-service"
 version = "0.1.0"
 dependencies = [
  "actix-web",
