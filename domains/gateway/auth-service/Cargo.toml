@@ -8,4 +8,7 @@ actix-web.workspace = true
 bcrypt.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+sqlx.workspace = true
+dotenvy = "0.15"
 types = { path = "../../../crates/types" }
+db = { path = "../../../crates/db" }
