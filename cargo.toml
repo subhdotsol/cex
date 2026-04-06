@@ -14,7 +14,7 @@ sqlx = { version = "0.8", features = [
     "postgres",
     "runtime-tokio",
     "uuid",
-    "time",
+    "chrono",
 ] }
 redis = { version = "0.26", features = ["tokio-comp"] }
 deadpool-redis = "0.15"
