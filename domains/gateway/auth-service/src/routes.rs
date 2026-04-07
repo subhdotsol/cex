@@ -113,7 +113,10 @@ async fn login(
 }
 
 #[post("/refresh")]
-async fn refresh(req: web::Json<RefreshTokenRequest>) -> impl Responder {
+async fn refresh(
+    req: web::Json<RefreshTokenRequest>,
+    redis_pool: web::Data<RedisPool>,
+) -> impl Responder {
     let claims = match utils::verify_token(&req.refresh_token, "secret") {
         Ok(c) => c,
         Err(e) => {
@@ -122,18 +125,50 @@ async fn refresh(req: web::Json<RefreshTokenRequest>) -> impl Responder {
         }
     };
 
-    let (access_token, expires_in) = match utils::generate_access_token(claims.sub, "secret") {
-        Ok(t) => t,
+    let mut redis_conn = match redis_pool.get().await {
+        Ok(conn) => conn,
         Err(e) => {
-            eprintln!("Access token generation failed: {:?}", e);
+            eprintln!("Failed to get redis connection: {:?}", e);
             return HttpResponse::InternalServerError().finish();
         }
     };
 
+    let redis_key = format!("refresh:{}", claims.sub);
+
+    let stored_token: Option<String> = match redis_conn.get(&redis_key).await {
+        Ok(token) => token,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    if stored_token.is_none() || stored_token.unwrap() != req.refresh_token {
+        return HttpResponse::Unauthorized().body("Expired or Invalid refresh token");
+    }
+
+    // delete old and return new token
+    let _: () = match redis_conn.del(&redis_key).await {
+        Ok(_) => (),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let tokens = match utils::generate_tokens(claims.sub, "secret") {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    // storing new refresh token
+    let ttl_seconds = 7 * 24 * 3600;
+
+    let _: Result<(), _> = redis_conn
+        .set_ex(redis_key, &tokens.refresh_token, ttl_seconds)
+        .await;
+
     let response = RefreshTokenResponse {
-        access_token,
-        expires_in,
+        access_token: tokens.access_token,
+        expires_in: tokens.expires_in,
     };
 
     HttpResponse::Ok().json(response)
 }
+
+// #[post("/logout")]
+// async fn logout(req: web::Json<LogoutRequest>) -> impl Responder {}
