@@ -10,7 +10,10 @@ uuid.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
 serde.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
 dotenvy = "0.15"
 types = { path = "../../../crates/types" }
 db = { path = "../../../crates/db" }
+redis-client = { path = "../../../crates/redis-client" }
 utils = { path = "../../../utils" }

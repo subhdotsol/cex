@@ -1,6 +1,8 @@
 use actix_web::{HttpResponse, Responder, post, web};
 use bcrypt::{hash, verify};
 use chrono::Utc;
+use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 use types::{
     LoginRequest, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, RegisterRequest,
@@ -50,12 +52,16 @@ async fn register(pool: web::Data<PgPool>, req: web::Json<RegisterRequest>) -> i
 }
 
 #[post("/login")]
-async fn login(pool: web::Data<PgPool>, req: web::Json<LoginRequest>) -> impl Responder {
+async fn login(
+    pg_pool: web::Data<PgPool>,
+    redis_pool: web::Data<RedisPool>,
+    req: web::Json<LoginRequest>,
+) -> impl Responder {
     if !req.email.contains('@') || !req.email.contains('.') {
         return HttpResponse::BadRequest().body("invalid email format");
     }
 
-    let user = match db::users::get_user_by_email(&pool, &req.email).await {
+    let user = match db::users::get_user_by_email(&pg_pool, &req.email).await {
         Ok(Some(u)) => u,
         Ok(None) => return HttpResponse::Unauthorized().body("Invalid credentials"),
         Err(e) => {
@@ -80,6 +86,22 @@ async fn login(pool: web::Data<PgPool>, req: web::Json<LoginRequest>) -> impl Re
             return HttpResponse::InternalServerError().finish();
         }
     };
+
+    // Store refresh token in Redis with 7-day TTL
+    let mut redis_conn = match redis_pool.get().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Failed to get redis connection: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let redis_key = format!("refresh:{}", user.id);
+    let ttl_seconds = 7 * 24 * 3600;
+
+    let _: Result<(), _> = redis_conn
+        .set_ex(redis_key, &tokens.refresh_token, ttl_seconds)
+        .await;
 
     let response = LoginResponse {
         access_token: tokens.access_token,
