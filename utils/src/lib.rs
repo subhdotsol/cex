@@ -1,13 +1,13 @@
+use anyhow::Result;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use anyhow::Result;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: Uuid,
-    pub exp: i64,
+    pub sub: Uuid, // this means the token belongs to user x
+    pub exp: i64,  // the token dies at this timestamp
 }
 
 pub struct TokenBundle {

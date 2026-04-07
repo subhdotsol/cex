@@ -1,8 +1,8 @@
 use actix_web::{HttpResponse, Responder, post, web};
 use bcrypt::{hash, verify};
 use chrono::Utc;
-use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool as RedisPool;
+use deadpool_redis::redis::AsyncCommands;
 use sqlx::PgPool;
 use types::{
     LoginRequest, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, RegisterRequest,
