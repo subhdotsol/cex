@@ -1,7 +1,6 @@
 use actix_web::{App, HttpServer, web};
 use std::env;
-
-mod routes;
+use auth_service::routes;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

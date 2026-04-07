@@ -1175,6 +1175,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "auth-service",
+ "chrono",
+ "db",
+ "deadpool-redis",
+ "dotenvy",
+ "redis 0.25.4",
+ "redis-client",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "types",
+ "uuid",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1668,6 +1687,8 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "ryu",
+ "sha1_smol",
+ "socket2 0.5.10",
  "tokio",
  "tokio-util",
  "url",

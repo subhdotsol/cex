@@ -1,8 +1,8 @@
 use actix_web::{HttpResponse, Responder, post, web};
 use bcrypt::{hash, verify};
 use chrono::Utc;
-use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 use std::env;
 use types::{
@@ -117,7 +117,10 @@ async fn login(
 }
 
 #[post("/refresh")]
-async fn refresh(req: web::Json<RefreshTokenRequest>) -> impl Responder {
+async fn refresh(
+    redis_pool: web::Data<RedisPool>,
+    req: web::Json<RefreshTokenRequest>,
+) -> impl Responder {
     let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
 
     let claims = match utils::verify_token(&req.refresh_token, &token_secret) {
@@ -127,6 +130,25 @@ async fn refresh(req: web::Json<RefreshTokenRequest>) -> impl Responder {
             return HttpResponse::Unauthorized().body("expired or invalid refresh token");
         }
     };
+
+    // Check Redis for the token
+    let mut redis_conn = match redis_pool.get().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Failed to get redis connection: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let redis_key = format!("refresh:{}", claims.sub);
+    let stored_token: Option<String> = match redis_conn.get(&redis_key).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    if stored_token.is_none() || stored_token.unwrap() != req.refresh_token {
+        return HttpResponse::Unauthorized().body("expired or invalid refresh token");
+    }
 
     let (access_token, expires_in) = match utils::generate_access_token(claims.sub, &token_secret) {
         Ok(t) => t,
