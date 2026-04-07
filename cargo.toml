@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "domains/*/*", "utils"]
+members = ["crates/*", "domains/*/*", "utils", "crates/redis-client"]
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -16,7 +16,7 @@ sqlx = { version = "0.8", features = [
     "uuid",
     "chrono",
 ] }
-redis = { version = "0.26", features = ["tokio-comp"] }
+redis = { version = "1.2.0", features = ["tokio-comp"] }
 deadpool-redis = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
