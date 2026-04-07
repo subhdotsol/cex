@@ -38,3 +38,13 @@ pub struct RefreshTokenResponse {
     pub access_token: String,
     pub expires_in: u64,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LogoutRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LogoutResponse {
+    pub ok: bool,
+}
