@@ -1,13 +1,13 @@
 use actix_web::{HttpResponse, Responder, post, web};
 use bcrypt::{hash, verify};
 use chrono::Utc;
-use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool as RedisPool;
+use deadpool_redis::redis::AsyncCommands;
 use sqlx::PgPool;
 use std::env;
 use types::{
-    LoginRequest, LoginResponse, RefreshTokenRequest, RefreshTokenResponse, RegisterRequest,
-    RegisterResponse,
+    LoginRequest, LoginResponse, LogoutRequest, LogoutResponse, RefreshTokenRequest,
+    RefreshTokenResponse, RegisterRequest, RegisterResponse,
 };
 use uuid::Uuid;
 
@@ -16,7 +16,8 @@ pub fn init(cfg: &mut web::ServiceConfig) {
         web::scope("/auth")
             .service(register)
             .service(login)
-            .service(refresh),
+            .service(refresh)
+            .service(logout),
     );
 }
 
@@ -140,5 +141,46 @@ async fn refresh(req: web::Json<RefreshTokenRequest>) -> impl Responder {
         expires_in,
     };
 
+    HttpResponse::Ok().json(response)
+}
+
+#[post("/logout")]
+async fn logout(req: web::Json<LogoutRequest>, redis_pool: web::Data<RedisPool>) -> impl Responder {
+    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
+
+    // verify refresh token
+    let claims = match utils::verify_token(&req.refresh_token, &token_secret) {
+        Ok(c) => c,
+        Err(_) => {
+            return HttpResponse::Unauthorized().body("Invalid refresh token");
+        }
+    };
+
+    let mut redis_conn = match redis_pool.get().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Failed to get redis connection: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let redis_key = format!("refresh:{}", claims.sub);
+
+    let stored_token: Option<String> = match redis_conn.get(&redis_key).await {
+        Ok(token) => token,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    if stored_token.is_none() || stored_token.unwrap() != req.refresh_token {
+        return HttpResponse::Unauthorized().body("invalid refresh token");
+    }
+
+    // Explicitly specify return type for del operation
+    let result: Result<(), _> = redis_conn.del(&redis_key).await;
+    if result.is_err() {
+        return HttpResponse::InternalServerError().finish();
+    }
+
+    let response = LogoutResponse { ok: true };
     HttpResponse::Ok().json(response)
 }
