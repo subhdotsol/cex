@@ -95,3 +95,15 @@ pub struct OrderResponse {
     pub filled_qty: String,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DepositRequest {
+    pub asset: String,
+    pub amount: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct WithdrawRequest {
+    pub asset: String,
+    pub amount: String,
+}

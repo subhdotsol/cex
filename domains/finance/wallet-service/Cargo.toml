@@ -1,0 +1,21 @@
+[package]
+name = "wallet-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+deadpool-redis.workspace = true
+dotenvy = "0.15"
+anyhow.workspace = true
+
+# Workspace crates
+types = { path = "../../../crates/types" }
+db = { path = "../../../crates/db" }
+redis-client = { path = "../../../crates/redis-client" }
+utils = { path = "../../../utils" }

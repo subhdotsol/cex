@@ -3,3 +3,6 @@ auth:
 
 order:
 	cargo run -p order-service
+
+wallet : 
+	cargo run -p wallet-service
