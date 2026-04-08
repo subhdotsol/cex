@@ -237,15 +237,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "arc-swap"
-version = "1.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "arcstr"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,7 +281,7 @@ dependencies = [
  "bcrypt",
  "chrono",
  "db",
- "deadpool-redis 0.15.1",
+ "deadpool-redis",
  "dotenvy",
  "redis 1.2.0",
  "redis-client",
@@ -595,16 +586,6 @@ checksum = "7ff315fab2a7a42132352909afc81140d06b8bbfd1414b098ce278e3f95dd1b9"
 dependencies = [
  "deadpool",
  "redis 0.25.4",
-]
-
-[[package]]
-name = "deadpool-redis"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ed4f481f6a4770b95e09b91e183ee5ed6e1d4a34c0b09814012b3ee5e585f70"
-dependencies = [
- "deadpool",
- "redis 0.26.1",
 ]
 
 [[package]]
@@ -1202,7 +1183,7 @@ dependencies = [
  "auth-service",
  "chrono",
  "db",
- "deadpool-redis 0.15.1",
+ "deadpool-redis",
  "dotenvy",
  "redis 0.25.4",
  "redis-client",
@@ -1528,7 +1509,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "db",
- "deadpool-redis 0.16.0",
+ "deadpool-redis",
  "dotenvy",
  "jsonwebtoken",
  "kafka",
@@ -1819,27 +1800,6 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e902a69d09078829137b4a5d9d082e0490393537badd7c91a3d69d14639e115f"
-dependencies = [
- "arc-swap",
- "async-trait",
- "bytes",
- "combine",
- "futures-util",
- "itoa",
- "num-bigint",
- "percent-encoding",
- "pin-project-lite",
- "ryu",
- "tokio",
- "tokio-util",
- "url",
-]
-
-[[package]]
-name = "redis"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f44e94c96d8870a387d88ce3de3fdd608cbfc0705f03cb343cdde91509d3e49a"
@@ -1867,7 +1827,7 @@ dependencies = [
 name = "redis-client"
 version = "0.1.0"
 dependencies = [
- "deadpool-redis 0.15.1",
+ "deadpool-redis",
  "redis 1.2.0",
 ]
 
