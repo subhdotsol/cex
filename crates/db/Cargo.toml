@@ -9,3 +9,4 @@ sqlx.workspace = true
 tokio.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+types = { path = "../types" }

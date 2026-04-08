@@ -1,5 +1,6 @@
 use sqlx::{PgPool, postgres::PgPoolOptions};
 pub mod users;
+pub mod orders;
 
 pub async fn connection_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
     PgPoolOptions::new()

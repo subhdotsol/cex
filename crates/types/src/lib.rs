@@ -48,3 +48,50 @@ pub struct LogoutRequest {
 pub struct LogoutResponse {
     pub ok: bool,
 }
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum OrderType {
+    Limit,
+    Market,
+    Ioc,
+    Fok,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum OrderStatus {
+    Open,
+    Filled,
+    PartiallyFilled,
+    Cancelled,
+    Rejected,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OrderRequest {
+    pub pair: String,
+    pub side: OrderSide,
+    pub order_type: OrderType,
+    pub price: Option<String>,
+    pub qty: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OrderResponse {
+    pub order_id: Uuid,
+    pub status: OrderStatus,
+    pub pair: String,
+    pub side: OrderSide,
+    pub price: Option<String>,
+    pub qty: String,
+    pub filled_qty: String,
+    pub created_at: DateTime<Utc>,
+}
