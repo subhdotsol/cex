@@ -136,3 +136,10 @@ pub struct PaginatedOrders {
     pub next_cursor: Option<Uuid>,
     pub has_more: bool,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OrderHealthCheckResponse {
+    pub status: String,
+    pub service: String,
+    pub version: f64,
+}

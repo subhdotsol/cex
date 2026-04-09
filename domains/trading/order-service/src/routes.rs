@@ -7,7 +7,10 @@ use kafka::FutureProducer;
 use kafka::order::{OrderNew, produce_order_new};
 use sqlx::PgPool;
 use std::env;
-use types::{GetAllOrdersRequest, OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderType};
+use types::{
+    GetAllOrdersRequest, OrderHealthCheckResponse, OrderRequest, OrderResponse, OrderSide,
+    OrderStatus, OrderType,
+};
 use uuid::Uuid;
 
 pub fn init(cfg: &mut web::ServiceConfig) {
@@ -297,5 +300,15 @@ async fn get_all_orders(
         has_more,
     };
 
+    HttpResponse::Ok().json(response)
+}
+
+#[get("/health")]
+async fn health_check() -> impl Responder {
+    let response = OrderHealthCheckResponse {
+        status: "ok".to_string(),
+        service: "order-service".to_string(),
+        version: 0.1.0,
+    };
     HttpResponse::Ok().json(response)
 }
