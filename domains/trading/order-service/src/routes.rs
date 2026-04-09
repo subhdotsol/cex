@@ -1,18 +1,20 @@
 use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
 use chrono::Utc;
+use db::orders;
 use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
 use kafka::FutureProducer;
 use kafka::order::{OrderNew, produce_order_new};
 use sqlx::PgPool;
 use std::env;
-use types::{OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderType};
+use types::{GetAllOrdersRequest, OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderType};
 use uuid::Uuid;
 
 pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/orders")
             .service(place_order)
+            .service(get_all_orders)
             .service(get_order),
     );
 }
@@ -203,4 +205,97 @@ async fn get_order(
 
     // 4. Return Order
     HttpResponse::Ok().json(order)
+}
+
+#[get("")]
+async fn get_all_orders(
+    req: HttpRequest,
+    pg_pool: web::Data<PgPool>,
+    query: web::Query<GetAllOrdersRequest>,
+) -> impl Responder {
+    let auth_header = match req.headers().get("Authorization") {
+        Some(h) => h.to_str().unwrap_or(""),
+        None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
+    };
+
+    if !auth_header.starts_with("Bearer ") {
+        return HttpResponse::Unauthorized().body("Invalid Authorization header format");
+    }
+
+    let token = &auth_header[7..];
+    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
+
+    let claims = match utils::verify_token(token, &token_secret) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().body("Invalid or expired token"),
+    };
+
+    let user_id = claims.sub;
+
+    let limit = query.limit.unwrap_or(50);
+    if limit < 1 || limit > 200 {
+        return HttpResponse::BadRequest().body("limit must be between 1 and 200");
+    }
+
+    // Fetch limit + 1 to check for has_more
+    let db_orders = match orders::get_all_orders(
+        &pg_pool,
+        user_id,
+        limit + 1,
+        query.status,
+        query.pair.clone(),
+        query.before,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Failed to fetch orders: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let has_more = db_orders.len() > limit;
+    let results = if has_more {
+        &db_orders[..limit]
+    } else {
+        &db_orders[..]
+    };
+
+    let next_cursor = if has_more {
+        results.last().map(|o| o.id)
+    } else {
+        None
+    };
+
+    let orders_response: Vec<OrderResponse> = results
+        .iter()
+        .map(|o| OrderResponse {
+            order_id: o.id,
+            status: match o.status {
+                db::orders::DbOrderStatus::Open => OrderStatus::Open,
+                db::orders::DbOrderStatus::Filled => OrderStatus::Filled,
+                db::orders::DbOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
+                db::orders::DbOrderStatus::Cancelled => OrderStatus::Cancelled,
+                db::orders::DbOrderStatus::Rejected => OrderStatus::Rejected,
+            },
+            pair: o.pair.clone(),
+            side: match o.side {
+                db::orders::DbOrderSide::Buy => OrderSide::Buy,
+                db::orders::DbOrderSide::Sell => OrderSide::Sell,
+            },
+            price: o.price.clone(),
+            qty: o.qty.clone(),
+            filled_qty: o.filled_qty.clone(),
+            created_at: o.created_at,
+        })
+        .collect();
+
+    let response = types::PaginatedOrders {
+        orders: orders_response,
+        next_cursor,
+        has_more,
+    };
+
+    HttpResponse::Ok().json(response)
 }
