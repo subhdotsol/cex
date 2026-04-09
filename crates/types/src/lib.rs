@@ -1,3 +1,5 @@
+use core::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -65,6 +67,12 @@ pub enum OrderType {
     Fok,
 }
 
+impl fmt::Display for OrderType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum OrderStatus {
@@ -73,6 +81,12 @@ pub enum OrderStatus {
     PartiallyFilled,
     Cancelled,
     Rejected,
+}
+
+impl fmt::Display for OrderStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -106,4 +120,19 @@ pub struct DepositRequest {
 pub struct WithdrawRequest {
     pub asset: String,
     pub amount: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetAllOrdersRequest {
+    pub status: Option<OrderStatus>,
+    pub pair: Option<String>,
+    pub limit: Option<usize>,
+    pub before: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PaginatedOrders {
+    pub orders: Vec<OrderResponse>,
+    pub next_cursor: Option<Uuid>,
+    pub has_more: bool,
 }
