@@ -128,3 +128,40 @@ pub async fn get_single_order(pool: &PgPool, order_id: Uuid) -> Result<Option<Or
 
     Ok(order)
 }
+
+// function to get all the orders of the specific users
+pub async fn get_all_orders(
+    pool: &PgPool,
+    user_id: Uuid,
+    limit: usize,
+    status: Option<OrderStatus>,
+    pair: Option<String>,
+    before: Option<Uuid>,
+) -> Result<Vec<Order>, sqlx::Error> {
+    let mut query_builder = sqlx::QueryBuilder::new(
+        "SELECT id, user_id, pair, side, order_type, price, qty, status, filled_qty, created_at, updated_at FROM orders WHERE user_id = "
+    );
+    query_builder.push_bind(user_id);
+
+    if let Some(status) = status {
+        query_builder.push(" AND status = ");
+        query_builder.push_bind(DbOrderStatus::from(status));
+    }
+
+    if let Some(pair) = pair {
+        query_builder.push(" AND pair = ");
+        query_builder.push_bind(pair);
+    }
+
+    if let Some(before) = before {
+        query_builder.push(" AND id < ");
+        query_builder.push_bind(before);
+    }
+
+    query_builder.push(" ORDER BY id DESC LIMIT ");
+    query_builder.push_bind(limit as i64);
+
+    let orders = query_builder.build_query_as::<Order>().fetch_all(pool).await?;
+
+    Ok(orders)
+}
