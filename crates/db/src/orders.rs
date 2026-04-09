@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Type};
+use types::{OrderSide, OrderStatus, OrderType};
 use uuid::Uuid;
-use types::{OrderSide, OrderType, OrderStatus};
 
 #[derive(Debug, Type)]
 #[sqlx(type_name = "order_side", rename_all = "UPPERCASE")]
@@ -61,6 +61,20 @@ impl From<OrderStatus> for DbOrderStatus {
     }
 }
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct Order {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub pair: String,
+    pub side: DbOrderSide,
+    pub order_type: DbOrderType,
+    pub price: Option<String>,
+    pub qty: String,
+    pub filled_qty: String,
+    pub status: DbOrderStatus,
+    pub created_at: DateTime<Utc>,
+}
+
 pub async fn create_order(
     pool: &PgPool,
     id: Uuid,
@@ -90,4 +104,20 @@ pub async fn create_order(
     .await?;
 
     Ok(())
+}
+
+// get single order
+pub async fn get_single_order(pool: &PgPool, order_id: Uuid) -> Result<Option<Order>, sqlx::Error> {
+    let order = sqlx::query_as::<_, Order>(
+        r#"
+        SELECT id, user_id, pair, side, order_type, price, qty, status, filled_qty, created_at
+        FROM orders
+        WHERE id = $1
+        "#,
+    )
+    .bind(order_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(order)
 }
