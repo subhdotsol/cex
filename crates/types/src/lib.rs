@@ -141,5 +141,5 @@ pub struct PaginatedOrders {
 pub struct OrderHealthCheckResponse {
     pub status: String,
     pub service: String,
-    pub version: f64,
+    pub version: String,
 }

@@ -18,6 +18,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
         web::scope("/orders")
             .service(place_order)
             .service(get_all_orders)
+            .service(health_check)
             .service(get_order),
     );
 }
@@ -207,7 +208,27 @@ async fn get_order(
     }
 
     // 4. Return Order
-    HttpResponse::Ok().json(order)
+    let response = OrderResponse {
+        order_id: order.id,
+        status: match order.status {
+            db::orders::DbOrderStatus::Open => OrderStatus::Open,
+            db::orders::DbOrderStatus::Filled => OrderStatus::Filled,
+            db::orders::DbOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
+            db::orders::DbOrderStatus::Cancelled => OrderStatus::Cancelled,
+            db::orders::DbOrderStatus::Rejected => OrderStatus::Rejected,
+        },
+        pair: order.pair.clone(),
+        side: match order.side {
+            db::orders::DbOrderSide::Buy => OrderSide::Buy,
+            db::orders::DbOrderSide::Sell => OrderSide::Sell,
+        },
+        price: order.price.clone(),
+        qty: order.qty.clone(),
+        filled_qty: order.filled_qty.clone(),
+        created_at: order.created_at,
+    };
+
+    HttpResponse::Ok().json(response)
 }
 
 #[get("")]
@@ -308,7 +329,7 @@ async fn health_check() -> impl Responder {
     let response = OrderHealthCheckResponse {
         status: "ok".to_string(),
         service: "order-service".to_string(),
-        version: 0.1.0,
+        version: "0.1.0".to_string(),
     };
     HttpResponse::Ok().json(response)
 }
