@@ -560,6 +560,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dotenvy",
+ "serde",
  "sqlx",
  "tokio",
  "types",
