@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sqlx::{PgPool, Type};
 use types::{OrderSide, OrderStatus, OrderType};
 use uuid::Uuid;
 
-#[derive(Debug, Type)]
+#[derive(Debug, Type, Serialize)]
 #[sqlx(type_name = "order_side", rename_all = "UPPERCASE")]
+#[serde(rename_all = "UPPERCASE")]
 pub enum DbOrderSide {
     Buy,
     Sell,
@@ -19,8 +21,9 @@ impl From<OrderSide> for DbOrderSide {
     }
 }
 
-#[derive(Debug, Type)]
+#[derive(Debug, Type, Serialize)]
 #[sqlx(type_name = "order_type", rename_all = "UPPERCASE")]
+#[serde(rename_all = "UPPERCASE")]
 pub enum DbOrderType {
     Limit,
     Market,
@@ -39,8 +42,9 @@ impl From<OrderType> for DbOrderType {
     }
 }
 
-#[derive(Debug, Type)]
+#[derive(Debug, Type, Serialize)]
 #[sqlx(type_name = "order_status", rename_all = "UPPERCASE")]
+#[serde(rename_all = "UPPERCASE")]
 pub enum DbOrderStatus {
     Open,
     Filled,
@@ -61,7 +65,7 @@ impl From<OrderStatus> for DbOrderStatus {
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sqlx::FromRow, Serialize)]
 pub struct Order {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -73,6 +77,7 @@ pub struct Order {
     pub filled_qty: String,
     pub status: DbOrderStatus,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 pub async fn create_order(
@@ -85,10 +90,11 @@ pub async fn create_order(
     price: Option<&str>,
     qty: &str,
 ) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
     sqlx::query(
         r#"
-        INSERT INTO orders (id, user_id, pair, side, order_type, price, qty, status, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO orders (id, user_id, pair, side, order_type, price, qty, status, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(id)
@@ -99,7 +105,8 @@ pub async fn create_order(
     .bind(price)
     .bind(qty)
     .bind(DbOrderStatus::Open)
-    .bind(Utc::now())
+    .bind(now)
+    .bind(now)
     .execute(pool)
     .await?;
 
@@ -110,7 +117,7 @@ pub async fn create_order(
 pub async fn get_single_order(pool: &PgPool, order_id: Uuid) -> Result<Option<Order>, sqlx::Error> {
     let order = sqlx::query_as::<_, Order>(
         r#"
-        SELECT id, user_id, pair, side, order_type, price, qty, status, filled_qty, created_at
+        SELECT id, user_id, pair, side, order_type, price, qty, status, filled_qty, created_at, updated_at
         FROM orders
         WHERE id = $1
         "#,
