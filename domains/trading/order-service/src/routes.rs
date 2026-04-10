@@ -1,15 +1,15 @@
-use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, delete, get, post, web};
 use chrono::Utc;
-use db::orders;
+use db::orders::{self, DbOrderStatus};
 use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
 use kafka::FutureProducer;
-use kafka::order::{OrderNew, produce_order_new};
+use kafka::order::{OrderCancel, OrderNew, produce_order_cancel, produce_order_new};
 use sqlx::PgPool;
 use std::env;
 use types::{
-    GetAllOrdersRequest, OrderHealthCheckResponse, OrderRequest, OrderResponse, OrderSide,
-    OrderStatus, OrderType,
+    GetAllOrdersRequest, OrderCancelResponse, OrderHealthCheckResponse, OrderRequest,
+    OrderResponse, OrderSide, OrderStatus, OrderType,
 };
 use uuid::Uuid;
 
@@ -19,7 +19,8 @@ pub fn init(cfg: &mut web::ServiceConfig) {
             .service(place_order)
             .service(get_all_orders)
             .service(health_check)
-            .service(get_order),
+            .service(get_order)
+            .service(cancel_order),
     );
 }
 
@@ -31,7 +32,6 @@ async fn place_order(
     kafka_producer: web::Data<FutureProducer>,
     body: web::Json<OrderRequest>,
 ) -> impl Responder {
-    // 1. JWT Authentication
     let auth_header = match req.headers().get("Authorization") {
         Some(h) => h.to_str().unwrap_or(""),
         None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
@@ -51,7 +51,6 @@ async fn place_order(
 
     let user_id = claims.sub;
 
-    // 2. Validation
     let qty: f64 = match body.qty.parse() {
         Ok(q) if q > 0.0 => q,
         _ => return HttpResponse::BadRequest().body("qty must be greater than 0"),
@@ -331,5 +330,116 @@ async fn health_check() -> impl Responder {
         service: "order-service".to_string(),
         version: "0.1.0".to_string(),
     };
+    HttpResponse::Ok().json(response)
+}
+
+#[delete("/{order_id}")]
+async fn cancel_order(
+    req: HttpRequest,
+    pg_pool: web::Data<PgPool>,
+    redis_pool: web::Data<RedisPool>,
+    kafka_producer: web::Data<FutureProducer>,
+    path: web::Path<Uuid>,
+) -> impl Responder {
+    let auth_header = match req.headers().get("Authorization") {
+        Some(h) => h.to_str().unwrap_or(""),
+        None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
+    };
+
+    if !auth_header.starts_with("Bearer ") {
+        return HttpResponse::Unauthorized().body("Invalid Authorization header format");
+    }
+
+    let token = &auth_header[7..];
+    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
+
+    let claims = match utils::verify_token(token, &token_secret) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().body("Invalid or expired token"),
+    };
+
+    let user_id = claims.sub;
+    let order_id = path.into_inner();
+
+    let order = match db::orders::get_single_order(&pg_pool, order_id).await {
+        Ok(Some(o)) => o,
+        Ok(None) => return HttpResponse::NotFound().body("Order not found"),
+        Err(e) => {
+            eprintln!("Failed to fetch order: {:?}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    if order.user_id != user_id {
+        return HttpResponse::Forbidden().body("Order belongs to different user");
+    }
+
+    if order.status != DbOrderStatus::Open && order.status != DbOrderStatus::PartiallyFilled {
+        return HttpResponse::BadRequest().body("Order is already filled, cancelled or rejected");
+    }
+
+    if let Err(e) =
+        db::orders::update_order_status(&pg_pool, order_id, DbOrderStatus::Cancelled).await
+    {
+        eprintln!("Failed to update order status: {:?}", e);
+        return HttpResponse::InternalServerError().finish();
+    }
+
+    let parts: Vec<&str> = order.pair.split('-').collect();
+    if parts.len() != 2 {
+        return HttpResponse::InternalServerError().body("invalid pair format in DB");
+    }
+    let base_asset = parts[0];
+    let quote_asset = parts[1];
+
+    let qty: f64 = order.qty.parse().unwrap_or(0.0);
+    let filled_qty: f64 = order.filled_qty.parse().unwrap_or(0.0);
+    let remaining_qty = qty - filled_qty;
+    let price: f64 = order
+        .price
+        .as_ref()
+        .map(|p| p.parse().unwrap_or(0.0))
+        .unwrap_or(0.0);
+
+    let (asset_to_unlock, amount_to_unlock) = match order.side {
+        db::orders::DbOrderSide::Buy => (quote_asset, price * remaining_qty),
+        db::orders::DbOrderSide::Sell => (base_asset, remaining_qty),
+    };
+
+    let mut redis_conn = match redis_pool.get().await {
+        Ok(conn) => conn,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let balance_key = format!("balance:{}:{}", user_id, asset_to_unlock);
+
+    let current_balance: f64 = match redis_conn.get::<_, Option<String>>(&balance_key).await {
+        Ok(Some(b)) => b.parse().unwrap_or(0.0),
+        _ => 0.0,
+    };
+
+    let _: Result<(), _> = redis_conn
+        .set(
+            &balance_key,
+            (current_balance + amount_to_unlock).to_string(),
+        )
+        .await;
+
+    let kafka_event = OrderCancel {
+        order_id,
+        user_id,
+        pair: order.pair.clone(),
+        timestamp: Utc::now(),
+    };
+
+    if let Err(e) = produce_order_cancel(&kafka_producer, &kafka_event).await {
+        eprintln!("Failed to produce kafka cancel message: {:?}", e);
+    }
+
+    let response = OrderCancelResponse {
+        order_id,
+        status: OrderStatus::Cancelled,
+    };
+
     HttpResponse::Ok().json(response)
 }
