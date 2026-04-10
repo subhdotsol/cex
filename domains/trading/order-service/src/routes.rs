@@ -1,4 +1,4 @@
-use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, delete, get, post, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, delete, get, post, web};
 use chrono::Utc;
 use db::orders::{self, DbOrderStatus};
 use deadpool_redis::Pool as RedisPool;
@@ -8,8 +8,8 @@ use kafka::order::{OrderCancel, OrderNew, produce_order_cancel, produce_order_ne
 use sqlx::PgPool;
 use std::env;
 use types::{
-    GetAllOrdersRequest, OrderCancelResponse, OrderHealthCheckResponse, OrderRequest,
-    OrderResponse, OrderSide, OrderStatus, OrderType,
+    BalanceUpdate, GetAllOrdersRequest, OrderCancelResponse, OrderHealthCheckResponse,
+    OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderType,
 };
 use uuid::Uuid;
 
@@ -32,6 +32,7 @@ async fn place_order(
     kafka_producer: web::Data<FutureProducer>,
     body: web::Json<OrderRequest>,
 ) -> impl Responder {
+    // 1. JWT Authentication
     let auth_header = match req.headers().get("Authorization") {
         Some(h) => h.to_str().unwrap_or(""),
         None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
@@ -51,6 +52,7 @@ async fn place_order(
 
     let user_id = claims.sub;
 
+    // 2. Validation
     let qty: f64 = match body.qty.parse() {
         Ok(q) if q > 0.0 => q,
         _ => return HttpResponse::BadRequest().body("qty must be greater than 0"),
@@ -106,8 +108,22 @@ async fn place_order(
     }
 
     // Lock funds (simplified DECRBY)
+    let new_balance = current_balance - amount_to_lock;
     let _: Result<(), _> = redis_conn
-        .set(&balance_key, (current_balance - amount_to_lock).to_string())
+        .set(&balance_key, new_balance.to_string())
+        .await;
+
+    // Notify Gateway about LOCK via Pub/Sub
+    let update = BalanceUpdate {
+        user_id,
+        asset: asset_to_lock.to_string(),
+        balance: new_balance.to_string(),
+        change_type: "LOCK".to_string(),
+        timestamp: Utc::now(),
+    };
+    let payload = serde_json::to_string(&update).unwrap_or_default();
+    let _: Result<(), _> = redis_conn
+        .publish(format!("balance:{}", user_id), payload)
         .await;
 
     // 4. INSERT into Postgres
@@ -125,7 +141,7 @@ async fn place_order(
     .await
     {
         eprintln!("Failed to save order: {:?}", e);
-        // ROLLBACK Redis (ideally should be in a transaction)
+        // ROLLBACK Redis
         let _: Result<(), _> = redis_conn
             .set(&balance_key, current_balance.to_string())
             .await;
@@ -146,7 +162,6 @@ async fn place_order(
 
     if let Err(e) = produce_order_new(&kafka_producer, &kafka_event).await {
         eprintln!("Failed to produce kafka message: {:?}", e);
-        // Note: In a real system, we'd need a way to handle this (e.g., outbox pattern)
     }
 
     // 6. Response
@@ -341,6 +356,7 @@ async fn cancel_order(
     kafka_producer: web::Data<FutureProducer>,
     path: web::Path<Uuid>,
 ) -> impl Responder {
+    // 1. JWT Authentication
     let auth_header = match req.headers().get("Authorization") {
         Some(h) => h.to_str().unwrap_or(""),
         None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
@@ -361,6 +377,7 @@ async fn cancel_order(
     let user_id = claims.sub;
     let order_id = path.into_inner();
 
+    // 2. Fetch Order from Database
     let order = match db::orders::get_single_order(&pg_pool, order_id).await {
         Ok(Some(o)) => o,
         Ok(None) => return HttpResponse::NotFound().body("Order not found"),
@@ -370,21 +387,23 @@ async fn cancel_order(
         }
     };
 
+    // 3. Ownership Check (403)
     if order.user_id != user_id {
         return HttpResponse::Forbidden().body("Order belongs to different user");
     }
 
+    // 4. Status Validation (400)
     if order.status != DbOrderStatus::Open && order.status != DbOrderStatus::PartiallyFilled {
         return HttpResponse::BadRequest().body("Order is already filled, cancelled or rejected");
     }
 
-    if let Err(e) =
-        db::orders::update_order_status(&pg_pool, order_id, DbOrderStatus::Cancelled).await
-    {
+    // 5. Side Effect: UPDATE orders SET status=CANCELLED
+    if let Err(e) = db::orders::update_order_status(&pg_pool, order_id, DbOrderStatus::Cancelled).await {
         eprintln!("Failed to update order status: {:?}", e);
         return HttpResponse::InternalServerError().finish();
     }
 
+    // 6. Side Effect: Unlock funds in Redis
     let parts: Vec<&str> = order.pair.split('-').collect();
     if parts.len() != 2 {
         return HttpResponse::InternalServerError().body("invalid pair format in DB");
@@ -395,11 +414,7 @@ async fn cancel_order(
     let qty: f64 = order.qty.parse().unwrap_or(0.0);
     let filled_qty: f64 = order.filled_qty.parse().unwrap_or(0.0);
     let remaining_qty = qty - filled_qty;
-    let price: f64 = order
-        .price
-        .as_ref()
-        .map(|p| p.parse().unwrap_or(0.0))
-        .unwrap_or(0.0);
+    let price: f64 = order.price.as_ref().map(|p| p.parse().unwrap_or(0.0)).unwrap_or(0.0);
 
     let (asset_to_unlock, amount_to_unlock) = match order.side {
         db::orders::DbOrderSide::Buy => (quote_asset, price * remaining_qty),
@@ -418,13 +433,23 @@ async fn cancel_order(
         _ => 0.0,
     };
 
+    let new_balance = current_balance + amount_to_unlock;
     let _: Result<(), _> = redis_conn
-        .set(
-            &balance_key,
-            (current_balance + amount_to_unlock).to_string(),
-        )
+        .set(&balance_key, new_balance.to_string())
         .await;
 
+    // Notify Gateway about UNLOCK via Pub/Sub
+    let update = BalanceUpdate {
+        user_id,
+        asset: asset_to_unlock.to_string(),
+        balance: new_balance.to_string(),
+        change_type: "UNLOCK".to_string(),
+        timestamp: Utc::now(),
+    };
+    let payload = serde_json::to_string(&update).unwrap_or_default();
+    let _: Result<(), _> = redis_conn.publish(format!("balance:{}", user_id), payload).await;
+
+    // 7. Side Effect: Produce orders.cancel to Kafka
     let kafka_event = OrderCancel {
         order_id,
         user_id,
@@ -436,6 +461,7 @@ async fn cancel_order(
         eprintln!("Failed to produce kafka cancel message: {:?}", e);
     }
 
+    // 8. Response 200
     let response = OrderCancelResponse {
         order_id,
         status: OrderStatus::Cancelled,

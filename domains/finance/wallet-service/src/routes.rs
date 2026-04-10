@@ -1,15 +1,12 @@
-use actix_web::{HttpResponse, Responder, post, web, HttpRequest};
-use deadpool_redis::redis::AsyncCommands;
+use actix_web::{HttpRequest, HttpResponse, Responder, post, web};
+use chrono::Utc;
 use deadpool_redis::Pool as RedisPool;
+use deadpool_redis::redis::AsyncCommands;
 use std::env;
-use types::{DepositRequest, WithdrawRequest};
+use types::{BalanceUpdate, DepositRequest, WithdrawRequest};
 
 pub fn init(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/wallet")
-            .service(deposit)
-            .service(withdraw),
-    );
+    cfg.service(web::scope("/wallet").service(deposit).service(withdraw));
 }
 
 #[post("/deposit")]
@@ -50,7 +47,7 @@ async fn deposit(
     };
 
     let balance_key = format!("balance:{}:{}", user_id, body.asset);
-    
+
     // Increase balance
     let current_balance: f64 = match redis_conn.get::<_, Option<String>>(&balance_key).await {
         Ok(Some(b)) => b.parse().unwrap_or(0.0),
@@ -60,7 +57,21 @@ async fn deposit(
     let new_balance = current_balance + amount;
     let _: Result<(), _> = redis_conn.set(&balance_key, new_balance.to_string()).await;
 
-    HttpResponse::Ok().body(format!("Deposited {} {}. New balance: {}", amount, body.asset, new_balance))
+    // 3. Redis Pub/Sub: Notify WebSocket Gateway
+    let update = BalanceUpdate {
+        user_id,
+        asset: body.asset.clone(),
+        balance: new_balance.to_string(),
+        change_type: "DEPOSIT".to_string(),
+        timestamp: Utc::now(),
+    };
+    let payload = serde_json::to_string(&update).unwrap_or_default();
+    let _: Result<(), _> = redis_conn.publish(format!("balance:{}", user_id), payload).await;
+
+    HttpResponse::Ok().body(format!(
+        "Deposited {} {}. New balance: {}",
+        amount, body.asset, new_balance
+    ))
 }
 
 #[post("/withdraw")]
@@ -101,7 +112,7 @@ async fn withdraw(
     };
 
     let balance_key = format!("balance:{}:{}", user_id, body.asset);
-    
+
     // Decrease balance
     let current_balance: f64 = match redis_conn.get::<_, Option<String>>(&balance_key).await {
         Ok(Some(b)) => b.parse().unwrap_or(0.0),
@@ -115,5 +126,19 @@ async fn withdraw(
     let new_balance = current_balance - amount;
     let _: Result<(), _> = redis_conn.set(&balance_key, new_balance.to_string()).await;
 
-    HttpResponse::Ok().body(format!("Withdrew {} {}. New balance: {}", amount, body.asset, new_balance))
+    // 3. Redis Pub/Sub: Notify WebSocket Gateway
+    let update = BalanceUpdate {
+        user_id,
+        asset: body.asset.clone(),
+        balance: new_balance.to_string(),
+        change_type: "WITHDRAW".to_string(),
+        timestamp: Utc::now(),
+    };
+    let payload = serde_json::to_string(&update).unwrap_or_default();
+    let _: Result<(), _> = redis_conn.publish(format!("balance:{}", user_id), payload).await;
+
+    HttpResponse::Ok().body(format!(
+        "Withdrew {} {}. New balance: {}",
+        amount, body.asset, new_balance
+    ))
 }

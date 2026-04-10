@@ -145,6 +145,15 @@ pub struct OrderHealthCheckResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct BalanceUpdate {
+    pub user_id: Uuid,
+    pub asset: String,
+    pub balance: String,
+    pub change_type: String, // e.g., "DEPOSIT", "WITHDRAW", "LOCK", "UNLOCK", "FILL"
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OrderCancelResponse {
     pub order_id: Uuid,
     pub status: OrderStatus,
