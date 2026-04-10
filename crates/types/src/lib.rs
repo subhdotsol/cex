@@ -143,3 +143,9 @@ pub struct OrderHealthCheckResponse {
     pub service: String,
     pub version: String,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OrderCancelResponse {
+    pub order_id: Uuid,
+    pub status: OrderStatus,
+}
