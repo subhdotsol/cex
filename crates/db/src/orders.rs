@@ -42,7 +42,7 @@ impl From<OrderType> for DbOrderType {
     }
 }
 
-#[derive(Debug, Type, Serialize)]
+#[derive(Debug, Type, Serialize, PartialEq)]
 #[sqlx(type_name = "order_status", rename_all = "UPPERCASE")]
 #[serde(rename_all = "UPPERCASE")]
 pub enum DbOrderStatus {
@@ -139,7 +139,7 @@ pub async fn get_all_orders(
     before: Option<Uuid>,
 ) -> Result<Vec<Order>, sqlx::Error> {
     let mut query_builder = sqlx::QueryBuilder::new(
-        "SELECT id, user_id, pair, side, order_type, price, qty, status, filled_qty, created_at, updated_at FROM orders WHERE user_id = "
+        "SELECT id, user_id, pair, side, order_type, price, qty, status, filled_qty, created_at, updated_at FROM orders WHERE user_id = ",
     );
     query_builder.push_bind(user_id);
 
@@ -161,7 +161,31 @@ pub async fn get_all_orders(
     query_builder.push(" ORDER BY id DESC LIMIT ");
     query_builder.push_bind(limit as i64);
 
-    let orders = query_builder.build_query_as::<Order>().fetch_all(pool).await?;
+    let orders = query_builder
+        .build_query_as::<Order>()
+        .fetch_all(pool)
+        .await?;
 
     Ok(orders)
+}
+
+// function to update order status
+pub async fn update_order_status(
+    pool: &PgPool,
+    order_id: Uuid,
+    status: DbOrderStatus,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+    sqlx::query(
+        r#"
+        UPDATE orders SET status = $1, updated_at = $2 WHERE id = $3
+        "#,
+    )
+    .bind(status)
+    .bind(now)
+    .bind(order_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
