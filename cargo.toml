@@ -21,3 +21,5 @@ deadpool-redis = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 anyhow = "1"
+futures = "0.3"
+ordered-float = "4"
