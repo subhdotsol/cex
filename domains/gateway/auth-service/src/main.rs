@@ -14,14 +14,14 @@ async fn main() -> std::io::Result<()> {
 
     let redis_pool = redis_client::create_pool(&redis_url);
 
-    println!("Starting auth-service on 127.0.0.1:8083");
+    println!("Starting auth-service on 127.0.0.1:8080");
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pg_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
             .configure(routes::init)
     })
-    .bind(("127.0.0.1", 8083))?
+    .bind(("127.0.0.1", 8080))?
     .run()
     .await
 }
