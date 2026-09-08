@@ -1,4 +1,6 @@
+pub mod events;
 pub mod order;
+pub mod trade;
 
 pub use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;

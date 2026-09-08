@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use rdkafka::producer::FutureProducer;
+use crate::events::{ORDERS_CANCEL, ORDERS_NEW};
 use crate::produce_message;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,7 +30,7 @@ pub async fn produce_order_new(
     order: &OrderNew,
 ) -> anyhow::Result<()> {
     let payload = serde_json::to_string(order)?;
-    produce_message(producer, "orders.new", &order.order_id.to_string(), &payload).await
+    produce_message(producer, ORDERS_NEW, &order.pair, &payload).await
 }
 
 pub async fn produce_order_cancel(
@@ -37,5 +38,5 @@ pub async fn produce_order_cancel(
     order: &OrderCancel,
 ) -> anyhow::Result<()> {
     let payload = serde_json::to_string(order)?;
-    produce_message(producer, "orders.cancel", &order.order_id.to_string(), &payload).await
+    produce_message(producer, ORDERS_CANCEL, &order.pair, &payload).await
 }
