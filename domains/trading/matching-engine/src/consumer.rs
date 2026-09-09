@@ -5,7 +5,11 @@ use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use kafka::FutureProducer;
+use kafka::events::{ORDERS_CANCEL, ORDERS_NEW};
 use kafka::order::{OrderCancel, OrderNew};
+use kafka::trade::{
+    CloseReason, EngineEvent, OrderClosed, TradeExecuted, produce_engine_event,
+};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::{ClientConfig, Message};
 
@@ -24,7 +28,7 @@ pub async fn run_consumer(
         .expect("Kafka consumer creation failed");
 
     consumer
-        .subscribe(&["orders.new", "orders.cancel"])
+        .subscribe(&[ORDERS_NEW, ORDERS_CANCEL])
         .expect("Kafka subscribe failed");
 
     let mut stream = consumer.stream();
@@ -38,11 +42,11 @@ pub async fn run_consumer(
                     _ => continue,
                 };
                 match topic.as_str() {
-                    "orders.new" => {
+                    ORDERS_NEW => {
                         handle_order_new(&payload, &state, &producer, &redis_pool).await;
                     }
-                    "orders.cancel" => {
-                        handle_order_cancel(&payload, &state).await;
+                    ORDERS_CANCEL => {
+                        handle_order_cancel(&payload, &state, &producer, &redis_pool).await;
                     }
                     _ => {}
                 }
@@ -81,7 +85,7 @@ async fn handle_order_new(
         Err(_) => return,
     };
 
-    let trades = {
+    let outcome = {
         let mut st = state.write().await;
         let book = match st.books.get_mut(&event.pair) {
             Some(b) => b,
@@ -103,16 +107,36 @@ async fn handle_order_new(
         )
     };
 
-    if trades.is_empty() {
-        return;
+    let mut events: Vec<EngineEvent> = outcome.trades.iter().map(trade_event).collect();
+    if outcome.dropped_qty > 1e-10 {
+        events.push(EngineEvent::OrderClosed(OrderClosed {
+            order_id: event.order_id,
+            user_id: event.user_id,
+            pair: event.pair.clone(),
+            reason: if outcome.rejected {
+                CloseReason::Rejected
+            } else {
+                CloseReason::Expired
+            },
+            remaining_qty: format!("{:.8}", outcome.dropped_qty),
+            closed_at: Utc::now(),
+        }));
     }
 
-    update_market_data(&event.pair, &trades, state).await;
-    emit_trade_events(&trades, producer).await;
+    if !outcome.trades.is_empty() {
+        update_market_data(&event.pair, &outcome.trades, state).await;
+    }
+    emit_engine_events(&events, producer).await;
+    // a resting limit order changes depth even when nothing traded
     publish_depth_to_redis(&event.pair, state, redis_pool).await;
 }
 
-async fn handle_order_cancel(payload: &str, state: &SharedState) {
+async fn handle_order_cancel(
+    payload: &str,
+    state: &SharedState,
+    producer: &FutureProducer,
+    redis_pool: &RedisPool,
+) {
     let event: OrderCancel = match serde_json::from_str(payload) {
         Ok(e) => e,
         Err(e) => {
@@ -121,10 +145,32 @@ async fn handle_order_cancel(payload: &str, state: &SharedState) {
         }
     };
 
-    let mut st = state.write().await;
-    if let Some(book) = st.books.get_mut(&event.pair) {
-        cancel_order(book, event.order_id);
+    let removed = {
+        let mut st = state.write().await;
+        st.books
+            .get_mut(&event.pair)
+            .and_then(|book| cancel_order(book, event.order_id))
+    };
+
+    // Not in the book any more (already filled / closed) -> nothing to release.
+    let Some((owner, remaining)) = removed else {
+        return;
+    };
+    if owner != event.user_id {
+        eprintln!("Cancel for order {} by non-owner {}", event.order_id, event.user_id);
+        return;
     }
+
+    let closed = EngineEvent::OrderClosed(OrderClosed {
+        order_id: event.order_id,
+        user_id: owner,
+        pair: event.pair.clone(),
+        reason: CloseReason::Cancelled,
+        remaining_qty: format!("{:.8}", remaining),
+        closed_at: Utc::now(),
+    });
+    emit_engine_events(&[closed], producer).await;
+    publish_depth_to_redis(&event.pair, state, redis_pool).await;
 }
 
 async fn update_market_data(pair: &str, trades: &[TradeResult], state: &SharedState) {
@@ -166,58 +212,28 @@ async fn update_market_data(pair: &str, trades: &[TradeResult], state: &SharedSt
     }
 }
 
-async fn emit_trade_events(trades: &[TradeResult], producer: &FutureProducer) {
-    for trade in trades {
-        // Publish to trades topic
-        let trade_payload = serde_json::json!({
-            "trade_id": trade.trade_id,
-            "pair": trade.pair,
-            "price": format!("{:.2}", trade.price),
-            "qty": format!("{:.8}", trade.qty),
-            "maker_order_id": trade.maker_order_id,
-            "taker_order_id": trade.taker_order_id,
-            "maker_user_id": trade.maker_user_id,
-            "taker_user_id": trade.taker_user_id,
-            "taker_side": format!("{:?}", trade.taker_side).to_uppercase(),
-            "executed_at": trade.executed_at,
-        });
-        let _ = kafka::produce_message(
-            producer,
-            "trades",
-            &trade.trade_id.to_string(),
-            &trade_payload.to_string(),
-        )
-        .await;
-
-        // Notify order service to update maker status
-        let maker_status = if trade.maker_fully_filled { "FILLED" } else { "PARTIALLY_FILLED" };
-        let maker_update = serde_json::json!({
-            "order_id": trade.maker_order_id,
-            "filled_qty": format!("{:.8}", trade.qty),
-            "status": maker_status,
-        });
-        let _ = kafka::produce_message(
-            producer,
-            "orders.update",
-            &trade.maker_order_id.to_string(),
-            &maker_update.to_string(),
-        )
-        .await;
-
-        // Notify order service to update taker status (order service checks total fill)
-        let taker_update = serde_json::json!({
-            "order_id": trade.taker_order_id,
-            "filled_qty": format!("{:.8}", trade.qty),
-            "status": "PARTIALLY_FILLED",
-        });
-        let _ = kafka::produce_message(
-            producer,
-            "orders.update",
-            &trade.taker_order_id.to_string(),
-            &taker_update.to_string(),
-        )
-        .await;
+async fn emit_engine_events(events: &[EngineEvent], producer: &FutureProducer) {
+    // sequential on purpose: settlement relies on the order of events within a pair
+    for event in events {
+        if let Err(e) = produce_engine_event(producer, event).await {
+            eprintln!("Failed to produce engine event {:?}: {:?}", event, e);
+        }
     }
+}
+
+fn trade_event(trade: &TradeResult) -> EngineEvent {
+    EngineEvent::Trade(TradeExecuted {
+        trade_id: trade.trade_id,
+        pair: trade.pair.clone(),
+        price: format!("{:.2}", trade.price),
+        qty: format!("{:.8}", trade.qty),
+        maker_order_id: trade.maker_order_id,
+        taker_order_id: trade.taker_order_id,
+        maker_user_id: trade.maker_user_id,
+        taker_user_id: trade.taker_user_id,
+        taker_side: format!("{:?}", trade.taker_side).to_uppercase(),
+        executed_at: trade.executed_at,
+    })
 }
 
 async fn publish_depth_to_redis(pair: &str, state: &SharedState, redis_pool: &RedisPool) {
