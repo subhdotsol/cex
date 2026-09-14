@@ -15,7 +15,9 @@ sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "uuid",
     "chrono",
+    "rust_decimal",
 ] }
+rust_decimal = { version = "1", features = ["serde-with-str"] }
 redis = { version = "1.2.0", features = ["tokio-comp"] }
 deadpool-redis = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }

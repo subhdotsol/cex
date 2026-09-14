@@ -11,3 +11,4 @@ chrono.workspace = true
 uuid.workspace = true
 serde.workspace = true
 types = { path = "../types" }
+rust_decimal.workspace = true
