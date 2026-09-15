@@ -224,18 +224,9 @@ async fn get_order(
     // 4. Return Order
     let response = OrderResponse {
         order_id: order.id,
-        status: match order.status {
-            db::orders::DbOrderStatus::Open => OrderStatus::Open,
-            db::orders::DbOrderStatus::Filled => OrderStatus::Filled,
-            db::orders::DbOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
-            db::orders::DbOrderStatus::Cancelled => OrderStatus::Cancelled,
-            db::orders::DbOrderStatus::Rejected => OrderStatus::Rejected,
-        },
+        status: order.status.into(),
         pair: order.pair.clone(),
-        side: match order.side {
-            db::orders::DbOrderSide::Buy => OrderSide::Buy,
-            db::orders::DbOrderSide::Sell => OrderSide::Sell,
-        },
+        side: order.side.into(),
         price: order.price.clone(),
         qty: order.qty.clone(),
         filled_qty: order.filled_qty.clone(),
@@ -310,18 +301,9 @@ async fn get_all_orders(
         .iter()
         .map(|o| OrderResponse {
             order_id: o.id,
-            status: match o.status {
-                db::orders::DbOrderStatus::Open => OrderStatus::Open,
-                db::orders::DbOrderStatus::Filled => OrderStatus::Filled,
-                db::orders::DbOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
-                db::orders::DbOrderStatus::Cancelled => OrderStatus::Cancelled,
-                db::orders::DbOrderStatus::Rejected => OrderStatus::Rejected,
-            },
+            status: o.status.into(),
             pair: o.pair.clone(),
-            side: match o.side {
-                db::orders::DbOrderSide::Buy => OrderSide::Buy,
-                db::orders::DbOrderSide::Sell => OrderSide::Sell,
-            },
+            side: o.side.into(),
             price: o.price.clone(),
             qty: o.qty.clone(),
             filled_qty: o.filled_qty.clone(),

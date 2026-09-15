@@ -81,6 +81,7 @@ pub enum OrderStatus {
     PartiallyFilled,
     Cancelled,
     Rejected,
+    Expired,
 }
 
 impl fmt::Display for OrderStatus {

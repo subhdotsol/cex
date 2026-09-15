@@ -52,6 +52,7 @@ pub enum DbOrderStatus {
     PartiallyFilled,
     Cancelled,
     Rejected,
+    Expired,
 }
 
 impl From<OrderStatus> for DbOrderStatus {
@@ -62,6 +63,7 @@ impl From<OrderStatus> for DbOrderStatus {
             OrderStatus::PartiallyFilled => DbOrderStatus::PartiallyFilled,
             OrderStatus::Cancelled => DbOrderStatus::Cancelled,
             OrderStatus::Rejected => DbOrderStatus::Rejected,
+            OrderStatus::Expired => DbOrderStatus::Expired,
         }
     }
 }
@@ -286,4 +288,26 @@ pub async fn set_fill_state(
     .execute(conn)
     .await?;
     Ok(())
+}
+
+impl From<DbOrderStatus> for OrderStatus {
+    fn from(s: DbOrderStatus) -> Self {
+        match s {
+            DbOrderStatus::Open => OrderStatus::Open,
+            DbOrderStatus::Filled => OrderStatus::Filled,
+            DbOrderStatus::PartiallyFilled => OrderStatus::PartiallyFilled,
+            DbOrderStatus::Cancelled => OrderStatus::Cancelled,
+            DbOrderStatus::Rejected => OrderStatus::Rejected,
+            DbOrderStatus::Expired => OrderStatus::Expired,
+        }
+    }
+}
+
+impl From<DbOrderSide> for OrderSide {
+    fn from(s: DbOrderSide) -> Self {
+        match s {
+            DbOrderSide::Buy => OrderSide::Buy,
+            DbOrderSide::Sell => OrderSide::Sell,
+        }
+    }
 }
