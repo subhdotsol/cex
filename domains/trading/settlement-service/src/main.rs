@@ -8,6 +8,7 @@
 // and every handler is idempotent so redelivery is safe.
 
 mod accounting;
+mod notify;
 mod settle;
 
 use futures::StreamExt;
@@ -31,6 +32,8 @@ async fn main() {
     dotenvy::dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let brokers = env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_pool = redis_client::create_pool(&redis_url);
 
     let pool = db::connection_pool(&database_url)
         .await
@@ -75,7 +78,10 @@ async fn main() {
             let mut backoff = Duration::from_millis(100);
             loop {
                 match handle(&pool, &event).await {
-                    Ok(_changes) => break,
+                    Ok(changes) => {
+                        notify::publish(&redis_pool, &changes).await;
+                        break;
+                    }
                     Err(e) => {
                         eprintln!("Settlement failed, retrying in {:?}: {e:?}", backoff);
                         tokio::time::sleep(backoff).await;

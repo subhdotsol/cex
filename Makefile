@@ -16,10 +16,14 @@ wallet:
 matching:
 	cargo run -p matching-engine
 
+settlement:
+	cargo run -p settlement-service
+
 cex: docker-up
 	@echo "Starting services..."
 	make auth & \
 	make order & \
 	make wallet & \
 	make matching & \
+	make settlement & \
 	wait
