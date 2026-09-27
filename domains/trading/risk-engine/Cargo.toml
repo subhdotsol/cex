@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+serde_json.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+deadpool-redis.workspace = true
+rust_decimal.workspace = true
+
+# Workspace crates
+types = { path = "../../../crates/types" }

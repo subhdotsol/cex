@@ -2086,6 +2086,14 @@ dependencies = [
 [[package]]
 name = "risk-engine"
 version = "0.1.0"
+dependencies = [
+ "deadpool-redis",
+ "rust_decimal",
+ "serde_json",
+ "sqlx",
+ "types",
+ "uuid",
+]
 
 [[package]]
 name = "rkyv"
