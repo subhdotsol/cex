@@ -9,3 +9,4 @@ serde.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
+actix-web.workspace = true

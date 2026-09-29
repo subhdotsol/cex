@@ -1,4 +1,4 @@
-use actix_web::{HttpRequest, HttpResponse, Responder, delete, get, post, web};
+use actix_web::{HttpResponse, Responder, delete, get, post, web};
 use chrono::Utc;
 use db::orders::{self, DbOrderStatus};
 use deadpool_redis::Pool as RedisPool;
@@ -6,7 +6,7 @@ use deadpool_redis::redis::AsyncCommands;
 use kafka::FutureProducer;
 use kafka::order::{OrderCancel, OrderNew, produce_order_cancel, produce_order_new};
 use sqlx::PgPool;
-use std::env;
+use utils::auth::AuthUser;
 use types::{
     BalanceUpdate, GetAllOrdersRequest, OrderCancelResponse, OrderHealthCheckResponse,
     OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderType,
@@ -26,31 +26,13 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 
 #[post("")]
 async fn place_order(
-    req: HttpRequest,
+    auth: AuthUser,
     pg_pool: web::Data<PgPool>,
     redis_pool: web::Data<RedisPool>,
     kafka_producer: web::Data<FutureProducer>,
     body: web::Json<OrderRequest>,
 ) -> impl Responder {
-    // 1. JWT Authentication
-    let auth_header = match req.headers().get("Authorization") {
-        Some(h) => h.to_str().unwrap_or(""),
-        None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
-    };
-
-    if !auth_header.starts_with("Bearer ") {
-        return HttpResponse::Unauthorized().body("Invalid Authorization header format");
-    }
-
-    let token = &auth_header[7..];
-    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
-
-    let claims = match utils::verify_token(token, &token_secret) {
-        Ok(c) => c,
-        Err(_) => return HttpResponse::Unauthorized().body("Invalid or expired token"),
-    };
-
-    let user_id = claims.sub;
+    let user_id = auth.0;
 
     // 2. Validation
     let qty: f64 = match body.qty.parse() {
@@ -181,29 +163,11 @@ async fn place_order(
 
 #[get("/{order_id}")]
 async fn get_order(
-    req: HttpRequest,
+    auth: AuthUser,
     pg_pool: web::Data<PgPool>,
     path: web::Path<Uuid>,
 ) -> impl Responder {
-    // 1. JWT Authentication
-    let auth_header = match req.headers().get("Authorization") {
-        Some(h) => h.to_str().unwrap_or(""),
-        None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
-    };
-
-    if !auth_header.starts_with("Bearer ") {
-        return HttpResponse::Unauthorized().body("Invalid Authorization header format");
-    }
-
-    let token = &auth_header[7..];
-    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
-
-    let claims = match utils::verify_token(token, &token_secret) {
-        Ok(c) => c,
-        Err(_) => return HttpResponse::Unauthorized().body("Invalid or expired token"),
-    };
-
-    let user_id = claims.sub;
+    let user_id = auth.0;
     let order_id = path.into_inner();
 
     // 2. Fetch from DB
@@ -238,28 +202,11 @@ async fn get_order(
 
 #[get("")]
 async fn get_all_orders(
-    req: HttpRequest,
+    auth: AuthUser,
     pg_pool: web::Data<PgPool>,
     query: web::Query<GetAllOrdersRequest>,
 ) -> impl Responder {
-    let auth_header = match req.headers().get("Authorization") {
-        Some(h) => h.to_str().unwrap_or(""),
-        None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
-    };
-
-    if !auth_header.starts_with("Bearer ") {
-        return HttpResponse::Unauthorized().body("Invalid Authorization header format");
-    }
-
-    let token = &auth_header[7..];
-    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
-
-    let claims = match utils::verify_token(token, &token_secret) {
-        Ok(c) => c,
-        Err(_) => return HttpResponse::Unauthorized().body("Invalid or expired token"),
-    };
-
-    let user_id = claims.sub;
+    let user_id = auth.0;
 
     let limit = query.limit.unwrap_or(50);
     if limit < 1 || limit > 200 {
@@ -332,31 +279,13 @@ async fn health_check() -> impl Responder {
 
 #[delete("/{order_id}")]
 async fn cancel_order(
-    req: HttpRequest,
+    auth: AuthUser,
     pg_pool: web::Data<PgPool>,
     redis_pool: web::Data<RedisPool>,
     kafka_producer: web::Data<FutureProducer>,
     path: web::Path<Uuid>,
 ) -> impl Responder {
-    // 1. JWT Authentication
-    let auth_header = match req.headers().get("Authorization") {
-        Some(h) => h.to_str().unwrap_or(""),
-        None => return HttpResponse::Unauthorized().body("Missing Authorization header"),
-    };
-
-    if !auth_header.starts_with("Bearer ") {
-        return HttpResponse::Unauthorized().body("Invalid Authorization header format");
-    }
-
-    let token = &auth_header[7..];
-    let token_secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
-
-    let claims = match utils::verify_token(token, &token_secret) {
-        Ok(c) => c,
-        Err(_) => return HttpResponse::Unauthorized().body("Invalid or expired token"),
-    };
-
-    let user_id = claims.sub;
+    let user_id = auth.0;
     let order_id = path.into_inner();
 
     // 2. Fetch Order from Database
