@@ -14,6 +14,7 @@ async fn main() -> std::io::Result<()> {
 
     let redis_pool = redis_client::create_pool(&redis_url);
     let kafka_producer = kafka::create_producer(&kafka_brokers);
+    let risk_config = web::Data::new(risk_engine::RiskConfig::default());
 
     println!("Starting order-service on 127.0.0.1:8081");
     HttpServer::new(move || {
@@ -21,6 +22,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pg_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
             .app_data(web::Data::new(kafka_producer.clone()))
+            .app_data(risk_config.clone())
             .configure(order_service::routes::init)
     })
     .bind(("127.0.0.1", 8081))?

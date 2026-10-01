@@ -1,15 +1,17 @@
 use actix_web::{HttpResponse, Responder, delete, get, post, web};
 use chrono::Utc;
+use db::Decimal;
+use db::balances;
 use db::orders::{self, DbOrderStatus};
 use deadpool_redis::Pool as RedisPool;
-use deadpool_redis::redis::AsyncCommands;
+use risk_engine::RiskConfig;
 use kafka::FutureProducer;
 use kafka::order::{OrderCancel, OrderNew, produce_order_cancel, produce_order_new};
 use sqlx::PgPool;
 use utils::auth::AuthUser;
 use types::{
-    BalanceUpdate, GetAllOrdersRequest, OrderCancelResponse, OrderHealthCheckResponse,
-    OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderType,
+    GetAllOrdersRequest, OrderCancelResponse, OrderHealthCheckResponse, OrderRequest,
+    OrderResponse, OrderStatus,
 };
 use uuid::Uuid;
 
@@ -30,88 +32,50 @@ async fn place_order(
     pg_pool: web::Data<PgPool>,
     redis_pool: web::Data<RedisPool>,
     kafka_producer: web::Data<FutureProducer>,
+    risk: web::Data<RiskConfig>,
     body: web::Json<OrderRequest>,
 ) -> impl Responder {
     let user_id = auth.0;
 
-    // 2. Validation
-    let qty: f64 = match body.qty.parse() {
-        Ok(q) if q > 0.0 => q,
-        _ => return HttpResponse::BadRequest().body("qty must be greater than 0"),
-    };
-
-    if body.order_type != OrderType::Market && body.price.is_none() {
-        return HttpResponse::BadRequest().body("price is required for LIMIT/IOC/FOK orders");
-    }
-
-    let price: f64 = if let Some(p) = &body.price {
-        match p.parse() {
-            Ok(val) if val > 0.0 => val,
-            _ => return HttpResponse::BadRequest().body("invalid price"),
+    // 1. Pre-trade risk checks + how much to reserve
+    let assessment = match risk_engine::assess(&risk, &pg_pool, &redis_pool, user_id, &body).await {
+        Ok(a) => a,
+        Err(e) if e.is_client_error() => return HttpResponse::BadRequest().body(e.to_string()),
+        Err(e) => {
+            eprintln!("Risk check failed: {e}");
+            return HttpResponse::InternalServerError().finish();
         }
-    } else {
-        0.0 // Market order might not have price initially
     };
 
-    // Unknown pair check (simplified)
-    let supported_pairs = vec!["BTC-USDT", "ETH-USDT"];
-    if !supported_pairs.contains(&body.pair.as_str()) {
-        return HttpResponse::BadRequest().body("unknown pair");
-    }
-
-    // 3. Balance pre-check and lock via Redis
-    let parts: Vec<&str> = body.pair.split('-').collect();
-    if parts.len() != 2 {
-        return HttpResponse::BadRequest().body("invalid pair format");
-    }
-    let base_asset = parts[0];
-    let quote_asset = parts[1];
-
-    let (asset_to_lock, amount_to_lock) = match body.side {
-        OrderSide::Buy => (quote_asset, price * qty),
-        OrderSide::Sell => (base_asset, qty),
-    };
-
-    let mut redis_conn = match redis_pool.get().await {
-        Ok(conn) => conn,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-
-    let balance_key = format!("balance:{}:{}", user_id, asset_to_lock);
-
-    // Check balance first (simplified atomic check using script or just GET/SET if not using MULTI)
-    let current_balance: f64 = match redis_conn.get::<_, Option<String>>(&balance_key).await {
-        Ok(Some(b)) => b.parse().unwrap_or(0.0),
-        _ => 0.0,
-    };
-
-    if current_balance < amount_to_lock {
-        return HttpResponse::BadRequest().body("insufficient balance");
-    }
-
-    // Lock funds (simplified DECRBY)
-    let new_balance = current_balance - amount_to_lock;
-    let _: Result<(), _> = redis_conn
-        .set(&balance_key, new_balance.to_string())
-        .await;
-
-    // Notify Gateway about LOCK via Pub/Sub
-    let update = BalanceUpdate {
-        user_id,
-        asset: asset_to_lock.to_string(),
-        balance: new_balance.to_string(),
-        change_type: "LOCK".to_string(),
-        timestamp: Utc::now(),
-    };
-    let payload = serde_json::to_string(&update).unwrap_or_default();
-    let _: Result<(), _> = redis_conn
-        .publish(format!("balance:{}", user_id), payload)
-        .await;
-
-    // 4. INSERT into Postgres
+    // 2. Reserve funds + insert order atomically
     let order_id = Uuid::new_v4();
-    if let Err(e) = db::orders::create_order(
-        &pg_pool,
+    let mut tx = match pg_pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            eprintln!("Failed to begin transaction: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let balance = match balances::lock(
+        &mut tx,
+        user_id,
+        &assessment.lock_asset,
+        assessment.lock_amount,
+        order_id,
+    )
+    .await
+    {
+        Ok(Some(b)) => b,
+        Ok(None) => return HttpResponse::BadRequest().body("insufficient balance"),
+        Err(e) => {
+            eprintln!("Failed to lock funds: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    if let Err(e) = orders::create_order_with_lock(
+        &mut tx,
         order_id,
         user_id,
         &body.pair,
@@ -119,35 +83,49 @@ async fn place_order(
         body.order_type,
         body.price.as_deref(),
         &body.qty,
+        assessment.lock_amount,
     )
     .await
     {
-        eprintln!("Failed to save order: {:?}", e);
-        // ROLLBACK Redis
-        let _: Result<(), _> = redis_conn
-            .set(&balance_key, current_balance.to_string())
-            .await;
+        eprintln!("Failed to save order: {e:?}");
         return HttpResponse::InternalServerError().body("Failed to save order");
     }
 
-    // 5. Produce to Kafka
+    if let Err(e) = tx.commit().await {
+        eprintln!("Failed to commit order: {e:?}");
+        return HttpResponse::InternalServerError().finish();
+    }
+
+    redis_client::publish_balance(
+        &redis_pool,
+        user_id,
+        &balance.asset,
+        balance.available.normalize().to_string(),
+        "LOCK",
+    )
+    .await;
+
+    // 3. Hand over to the matching engine
+    let created_at = Utc::now();
     let kafka_event = OrderNew {
         order_id,
         user_id,
         pair: body.pair.clone(),
         side: format!("{:?}", body.side).to_uppercase(),
         order_type: format!("{:?}", body.order_type).to_uppercase(),
-        price: body.price.clone(),
-        qty: body.qty.clone(),
-        timestamp: Utc::now(),
+        price: assessment.order.price.map(|p| p.normalize().to_string()),
+        qty: assessment.order.qty.normalize().to_string(),
+        timestamp: created_at,
     };
 
     if let Err(e) = produce_order_new(&kafka_producer, &kafka_event).await {
-        eprintln!("Failed to produce kafka message: {:?}", e);
+        // The engine never saw it: reject the order and give the funds back.
+        eprintln!("Failed to produce kafka message: {e:?}");
+        reject_unsent_order(&pg_pool, &redis_pool, user_id, order_id, &assessment).await;
+        return HttpResponse::ServiceUnavailable().body("order could not be submitted, try again");
     }
 
-    // 6. Response
-    let response = OrderResponse {
+    HttpResponse::Ok().json(OrderResponse {
         order_id,
         status: OrderStatus::Open,
         pair: body.pair.clone(),
@@ -155,10 +133,43 @@ async fn place_order(
         price: body.price.clone(),
         qty: body.qty.clone(),
         filled_qty: "0".to_string(),
-        created_at: Utc::now(),
-    };
+        created_at,
+    })
+}
 
-    HttpResponse::Ok().json(response)
+async fn reject_unsent_order(
+    pg_pool: &PgPool,
+    redis_pool: &RedisPool,
+    user_id: Uuid,
+    order_id: Uuid,
+    assessment: &risk_engine::Assessment,
+) {
+    let result: Result<_, sqlx::Error> = async {
+        let mut tx = pg_pool.begin().await?;
+        orders::set_fill_state(&mut tx, order_id, Decimal::ZERO, Decimal::ZERO, DbOrderStatus::Rejected)
+            .await?;
+        let b = balances::adjust(
+            &mut tx,
+            user_id,
+            &assessment.lock_asset,
+            assessment.lock_amount,
+            -assessment.lock_amount,
+            balances::kind::UNLOCK,
+            Some(order_id),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(b)
+    }
+    .await;
+
+    match result {
+        Ok(b) => {
+            redis_client::publish_balance(redis_pool, user_id, &b.asset, b.available.normalize().to_string(), "UNLOCK")
+                .await
+        }
+        Err(e) => eprintln!("CRITICAL: failed to release funds of unsent order {order_id}: {e:?}"),
+    }
 }
 
 #[get("/{order_id}")]
@@ -281,7 +292,6 @@ async fn health_check() -> impl Responder {
 async fn cancel_order(
     auth: AuthUser,
     pg_pool: web::Data<PgPool>,
-    redis_pool: web::Data<RedisPool>,
     kafka_producer: web::Data<FutureProducer>,
     path: web::Path<Uuid>,
 ) -> impl Responder {
@@ -314,51 +324,8 @@ async fn cancel_order(
         return HttpResponse::InternalServerError().finish();
     }
 
-    // 6. Side Effect: Unlock funds in Redis
-    let parts: Vec<&str> = order.pair.split('-').collect();
-    if parts.len() != 2 {
-        return HttpResponse::InternalServerError().body("invalid pair format in DB");
-    }
-    let base_asset = parts[0];
-    let quote_asset = parts[1];
-
-    let qty: f64 = order.qty.parse().unwrap_or(0.0);
-    let filled_qty: f64 = order.filled_qty.parse().unwrap_or(0.0);
-    let remaining_qty = qty - filled_qty;
-    let price: f64 = order.price.as_ref().map(|p| p.parse().unwrap_or(0.0)).unwrap_or(0.0);
-
-    let (asset_to_unlock, amount_to_unlock) = match order.side {
-        db::orders::DbOrderSide::Buy => (quote_asset, price * remaining_qty),
-        db::orders::DbOrderSide::Sell => (base_asset, remaining_qty),
-    };
-
-    let mut redis_conn = match redis_pool.get().await {
-        Ok(conn) => conn,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
-
-    let balance_key = format!("balance:{}:{}", user_id, asset_to_unlock);
-
-    let current_balance: f64 = match redis_conn.get::<_, Option<String>>(&balance_key).await {
-        Ok(Some(b)) => b.parse().unwrap_or(0.0),
-        _ => 0.0,
-    };
-
-    let new_balance = current_balance + amount_to_unlock;
-    let _: Result<(), _> = redis_conn
-        .set(&balance_key, new_balance.to_string())
-        .await;
-
-    // Notify Gateway about UNLOCK via Pub/Sub
-    let update = BalanceUpdate {
-        user_id,
-        asset: asset_to_unlock.to_string(),
-        balance: new_balance.to_string(),
-        change_type: "UNLOCK".to_string(),
-        timestamp: Utc::now(),
-    };
-    let payload = serde_json::to_string(&update).unwrap_or_default();
-    let _: Result<(), _> = redis_conn.publish(format!("balance:{}", user_id), payload).await;
+    // 6. Funds are released by the settlement service once the matching engine
+    //    confirms the order left the book (it may still fill until then).
 
     // 7. Side Effect: Produce orders.cancel to Kafka
     let kafka_event = OrderCancel {

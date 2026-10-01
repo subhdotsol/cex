@@ -1657,6 +1657,7 @@ dependencies = [
  "jsonwebtoken",
  "kafka",
  "redis-client",
+ "risk-engine",
  "serde",
  "serde_json",
  "sqlx",
@@ -2003,8 +2004,12 @@ dependencies = [
 name = "redis-client"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "deadpool-redis",
  "redis 1.2.0",
+ "serde_json",
+ "types",
+ "uuid",
 ]
 
 [[package]]

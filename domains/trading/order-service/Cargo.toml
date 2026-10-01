@@ -21,3 +21,4 @@ db = { path = "../../../crates/db" }
 redis-client = { path = "../../../crates/redis-client" }
 kafka = { path = "../../../crates/kafka" }
 utils = { path = "../../../utils" }
+risk-engine = { path = "../risk-engine" }

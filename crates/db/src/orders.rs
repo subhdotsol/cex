@@ -83,39 +83,6 @@ pub struct Order {
     pub updated_at: DateTime<Utc>,
 }
 
-pub async fn create_order(
-    pool: &PgPool,
-    id: Uuid,
-    user_id: Uuid,
-    pair: &str,
-    side: OrderSide,
-    order_type: OrderType,
-    price: Option<&str>,
-    qty: &str,
-) -> Result<(), sqlx::Error> {
-    let now = Utc::now();
-    sqlx::query(
-        r#"
-        INSERT INTO orders (id, user_id, pair, side, order_type, price, qty, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
-    )
-    .bind(id)
-    .bind(user_id)
-    .bind(pair)
-    .bind(DbOrderSide::from(side))
-    .bind(DbOrderType::from(order_type))
-    .bind(price)
-    .bind(qty)
-    .bind(DbOrderStatus::Open)
-    .bind(now)
-    .bind(now)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
 // get single order
 pub async fn get_single_order(pool: &PgPool, order_id: Uuid) -> Result<Option<Order>, sqlx::Error> {
     let order = sqlx::query_as::<_, Order>(
