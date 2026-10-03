@@ -27,3 +27,9 @@ cex: docker-up
 	make matching & \
 	make settlement & \
 	wait
+
+topics:
+	for t in orders.new orders.cancel engine.events; do \
+		docker exec cex-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+			--create --if-not-exists --topic $$t --partitions 3 --replication-factor 1; \
+	done

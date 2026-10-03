@@ -44,8 +44,8 @@ impl From<OrderType> for DbOrderType {
 }
 
 #[derive(Debug, Clone, Copy, Type, Serialize, PartialEq)]
-#[sqlx(type_name = "order_status", rename_all = "UPPERCASE")]
-#[serde(rename_all = "UPPERCASE")]
+#[sqlx(type_name = "order_status", rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DbOrderStatus {
     Open,
     Filled,

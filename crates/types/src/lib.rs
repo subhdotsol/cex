@@ -74,7 +74,7 @@ impl fmt::Display for OrderType {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
-#[serde(rename_all = "UPPERCASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OrderStatus {
     Open,
     Filled,
