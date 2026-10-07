@@ -5,8 +5,8 @@ use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use kafka::FutureProducer;
-use kafka::events::{ORDERS_CANCEL, ORDERS_NEW};
-use kafka::order::{OrderCancel, OrderNew};
+use kafka::events::ORDER_COMMANDS;
+use kafka::order::{OrderCancel, OrderCommand, OrderNew};
 use kafka::trade::{
     CloseReason, EngineEvent, OrderClosed, TradeExecuted, produce_engine_event,
 };
@@ -28,7 +28,7 @@ pub async fn run_consumer(
         .expect("Kafka consumer creation failed");
 
     consumer
-        .subscribe(&[ORDERS_NEW, ORDERS_CANCEL])
+        .subscribe(&[ORDER_COMMANDS])
         .expect("Kafka subscribe failed");
 
     let mut stream = consumer.stream();
@@ -36,19 +36,23 @@ pub async fn run_consumer(
     while let Some(result) = stream.next().await {
         match result {
             Ok(msg) => {
-                let topic = msg.topic().to_string();
-                let payload = match msg.payload_view::<str>() {
-                    Some(Ok(s)) => s.to_string(),
-                    _ => continue,
+                let cmd: OrderCommand = match msg
+                    .payload_view::<str>()
+                    .and_then(|r| r.ok())
+                    .map(serde_json::from_str)
+                {
+                    Some(Ok(c)) => c,
+                    Some(Err(e)) => {
+                        eprintln!("Skipping malformed order command: {:?}", e);
+                        continue;
+                    }
+                    None => continue,
                 };
-                match topic.as_str() {
-                    ORDERS_NEW => {
-                        handle_order_new(&payload, &state, &producer, &redis_pool).await;
+                match cmd {
+                    OrderCommand::New(o) => handle_order_new(o, &state, &producer, &redis_pool).await,
+                    OrderCommand::Cancel(c) => {
+                        handle_order_cancel(c, &state, &producer, &redis_pool).await
                     }
-                    ORDERS_CANCEL => {
-                        handle_order_cancel(&payload, &state, &producer, &redis_pool).await;
-                    }
-                    _ => {}
                 }
             }
             Err(e) => eprintln!("Kafka consumer error: {:?}", e),
@@ -57,19 +61,11 @@ pub async fn run_consumer(
 }
 
 async fn handle_order_new(
-    payload: &str,
+    event: OrderNew,
     state: &SharedState,
     producer: &FutureProducer,
     redis_pool: &RedisPool,
 ) {
-    let event: OrderNew = match serde_json::from_str(payload) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Failed to deserialize OrderNew: {:?}", e);
-            return;
-        }
-    };
-
     let side = match event.side.as_str() {
         "BUY" => Side::Buy,
         "SELL" => Side::Sell,
@@ -132,19 +128,11 @@ async fn handle_order_new(
 }
 
 async fn handle_order_cancel(
-    payload: &str,
+    event: OrderCancel,
     state: &SharedState,
     producer: &FutureProducer,
     redis_pool: &RedisPool,
 ) {
-    let event: OrderCancel = match serde_json::from_str(payload) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Failed to deserialize OrderCancel: {:?}", e);
-            return;
-        }
-    };
-
     let removed = {
         let mut st = state.write().await;
         st.books
