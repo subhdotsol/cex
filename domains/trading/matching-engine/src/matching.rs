@@ -20,6 +20,12 @@ pub struct TradeResult {
     pub executed_at: DateTime<Utc>,
 }
 
+/// Same command applied to the same book always yields the same trade ids, so a
+/// command re-processed after a crash produces duplicates settlement can detect.
+fn deterministic_trade_id(taker: Uuid, maker: Uuid, seq: usize) -> Uuid {
+    Uuid::new_v5(&taker, format!("{maker}:{seq}").as_bytes())
+}
+
 fn available_liquidity(book: &OrderBook, side: &Side, limit: Option<f64>) -> f64 {
     match side {
         Side::Buy => {
@@ -108,7 +114,7 @@ pub fn match_order(
                     remaining -= fill_qty;
                     let maker_fully_filled = maker.remaining_qty <= 1e-10;
                     trades.push(TradeResult {
-                        trade_id: Uuid::new_v4(),
+                        trade_id: deterministic_trade_id(order_id, maker.order_id, trades.len()),
                         maker_order_id: maker.order_id,
                         taker_order_id: order_id,
                         maker_user_id: maker.user_id,
@@ -170,7 +176,7 @@ pub fn match_order(
                     remaining -= fill_qty;
                     let maker_fully_filled = maker.remaining_qty <= 1e-10;
                     trades.push(TradeResult {
-                        trade_id: Uuid::new_v4(),
+                        trade_id: deterministic_trade_id(order_id, maker.order_id, trades.len()),
                         maker_order_id: maker.order_id,
                         taker_order_id: order_id,
                         maker_user_id: maker.user_id,
@@ -313,6 +319,20 @@ mod tests {
         assert!(out.rejected);
         assert!(out.trades.is_empty());
         assert_eq!(b.index.len(), 1);
+    }
+
+    #[test]
+    fn replay_yields_same_trade_ids() {
+        let run = || {
+            let mut b = book();
+            let maker = Uuid::from_u128(1);
+            let taker = Uuid::from_u128(2);
+            match_order(&mut b, maker, Uuid::nil(), "BTC-USDT", Side::Sell, "LIMIT", Some(100.0), 1.0, Utc::now());
+            match_order(&mut b, taker, Uuid::nil(), "BTC-USDT", Side::Buy, "LIMIT", Some(100.0), 1.0, Utc::now())
+                .trades[0]
+                .trade_id
+        };
+        assert_eq!(run(), run());
     }
 
     #[test]

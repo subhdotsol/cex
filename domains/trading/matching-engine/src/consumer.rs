@@ -10,9 +10,55 @@ use kafka::order::{OrderCancel, OrderCommand, OrderNew};
 use kafka::trade::{
     CloseReason, EngineEvent, OrderClosed, TradeExecuted, produce_engine_event,
 };
-use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::{ClientConfig, Message};
+use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
+use rdkafka::{ClientConfig, Message, Offset, TopicPartitionList};
+use std::collections::HashMap;
+use std::time::Duration;
 
+/// Partition -> first offset that has NOT been processed yet (committed offset).
+async fn committed_positions(consumer: &StreamConsumer) -> (Vec<i32>, HashMap<i32, i64>) {
+    loop {
+        let partitions: Vec<i32> = match consumer.fetch_metadata(Some(ORDER_COMMANDS), Duration::from_secs(10)) {
+            Ok(md) => md
+                .topics()
+                .iter()
+                .filter(|t| t.error().is_none())
+                .flat_map(|t| t.partitions().iter().map(|p| p.id()))
+                .collect(),
+            Err(e) => {
+                eprintln!("Metadata fetch failed: {:?}", e);
+                vec![]
+            }
+        };
+        if partitions.is_empty() {
+            eprintln!("Topic {ORDER_COMMANDS} not available yet (run `make topics`), retrying...");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        let mut tpl = TopicPartitionList::new();
+        for p in &partitions {
+            tpl.add_partition(ORDER_COMMANDS, *p);
+        }
+        let committed = consumer
+            .committed_offsets(tpl, Duration::from_secs(10))
+            .expect("Failed to read committed offsets");
+        let positions = committed
+            .elements()
+            .iter()
+            .filter_map(|e| match e.offset() {
+                Offset::Offset(o) => Some((e.partition(), o)),
+                _ => None,
+            })
+            .collect();
+        return (partitions, positions);
+    }
+}
+
+/// The order book lives only in memory. On startup it is rebuilt by replaying
+/// `orders.commands` from the beginning: everything before the committed offset is
+/// applied silently (its events were already published), everything after is live.
+/// Offsets are committed only after a command's events have been produced.
 pub async fn run_consumer(
     brokers: &str,
     state: SharedState,
@@ -22,41 +68,79 @@ pub async fn run_consumer(
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "matching-engine-group")
         .set("bootstrap.servers", brokers)
-        .set("enable.auto.commit", "true")
-        .set("auto.offset.reset", "earliest")
+        .set("enable.auto.commit", "false")
         .create()
         .expect("Kafka consumer creation failed");
 
-    consumer
-        .subscribe(&[ORDER_COMMANDS])
-        .expect("Kafka subscribe failed");
+    let (partitions, replay_until) = committed_positions(&consumer).await;
+    let mut replaying: HashMap<i32, i64> = replay_until
+        .into_iter()
+        .filter(|(_, offset)| *offset > 0)
+        .collect();
+    println!("Replaying {ORDER_COMMANDS} up to {:?}", replaying);
+
+    // single engine instance owns every partition: assign instead of subscribe
+    let mut assignment = TopicPartitionList::new();
+    for p in &partitions {
+        assignment
+            .add_partition_offset(ORDER_COMMANDS, *p, Offset::Beginning)
+            .expect("invalid partition offset");
+    }
+    consumer.assign(&assignment).expect("Kafka assign failed");
+
+    if replaying.is_empty() {
+        println!("Nothing to replay, live");
+    }
 
     let mut stream = consumer.stream();
-
     while let Some(result) = stream.next().await {
-        match result {
-            Ok(msg) => {
-                let cmd: OrderCommand = match msg
-                    .payload_view::<str>()
-                    .and_then(|r| r.ok())
-                    .map(serde_json::from_str)
-                {
-                    Some(Ok(c)) => c,
-                    Some(Err(e)) => {
-                        eprintln!("Skipping malformed order command: {:?}", e);
-                        continue;
-                    }
-                    None => continue,
-                };
-                match cmd {
-                    OrderCommand::New(o) => handle_order_new(o, &state, &producer, &redis_pool).await,
-                    OrderCommand::Cancel(c) => {
-                        handle_order_cancel(c, &state, &producer, &redis_pool).await
-                    }
-                }
+        let msg = match result {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Kafka consumer error: {:?}", e);
+                continue;
             }
-            Err(e) => eprintln!("Kafka consumer error: {:?}", e),
+        };
+
+        let replay_until = replaying.get(&msg.partition()).copied();
+        let live = !matches!(replay_until, Some(until) if msg.offset() < until);
+
+        let cmd: Option<OrderCommand> = match msg.payload_view::<str>().and_then(|r| r.ok()).map(serde_json::from_str) {
+            Some(Ok(c)) => Some(c),
+            Some(Err(e)) => {
+                eprintln!("Skipping malformed order command: {:?}", e);
+                None
+            }
+            None => None,
+        };
+
+        match cmd {
+            Some(OrderCommand::New(o)) => handle_order_new(o, &state, &producer, &redis_pool, live).await,
+            Some(OrderCommand::Cancel(c)) => handle_order_cancel(c, &state, &producer, &redis_pool, live).await,
+            None => {}
         }
+
+        if live {
+            if let Err(e) = consumer.commit_message(&msg, CommitMode::Sync) {
+                eprintln!("Offset commit failed: {:?}", e);
+            }
+        } else if replay_until.is_some_and(|until| msg.offset() + 1 >= until) {
+            replaying.remove(&msg.partition());
+            if replaying.is_empty() {
+                println!(
+                    "Replay finished, live. {} orders in book",
+                    state.read().await.orders_in_book()
+                );
+                publish_all_depths(&state, &redis_pool).await;
+            }
+        }
+    }
+}
+
+async fn publish_all_depths(state: &SharedState, redis_pool: &RedisPool) {
+    let pairs: Vec<String> = state.read().await.books.keys().cloned().collect();
+    for pair in pairs {
+        publish_depth_to_redis(&pair, state, redis_pool).await;
     }
 }
 
@@ -65,6 +149,7 @@ async fn handle_order_new(
     state: &SharedState,
     producer: &FutureProducer,
     redis_pool: &RedisPool,
+    live: bool,
 ) {
     let side = match event.side.as_str() {
         "BUY" => Side::Buy,
@@ -122,6 +207,9 @@ async fn handle_order_new(
     if !outcome.trades.is_empty() {
         update_market_data(&event.pair, &outcome.trades, state).await;
     }
+    if !live {
+        return;
+    }
     emit_engine_events(&events, producer).await;
     // a resting limit order changes depth even when nothing traded
     publish_depth_to_redis(&event.pair, state, redis_pool).await;
@@ -132,6 +220,7 @@ async fn handle_order_cancel(
     state: &SharedState,
     producer: &FutureProducer,
     redis_pool: &RedisPool,
+    live: bool,
 ) {
     let removed = {
         let mut st = state.write().await;
@@ -144,6 +233,9 @@ async fn handle_order_cancel(
     let Some((owner, remaining)) = removed else {
         return;
     };
+    if !live {
+        return;
+    }
     if owner != event.user_id {
         eprintln!("Cancel for order {} by non-owner {}", event.order_id, event.user_id);
         return;
