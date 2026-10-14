@@ -3,6 +3,7 @@ pub mod users;
 pub mod orders;
 pub mod balances;
 pub mod trades;
+pub mod api_keys;
 
 pub use rust_decimal::Decimal;
 
