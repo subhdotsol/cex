@@ -338,6 +338,7 @@ dependencies = [
  "redis 1.2.0",
  "redis-client",
  "serde",
+ "serde_json",
  "sqlx",
  "types",
  "utils",

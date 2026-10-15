@@ -1,4 +1,4 @@
-use actix_web::{HttpResponse, Responder, post, web};
+use actix_web::{HttpResponse, Responder, delete, get, post, web};
 use bcrypt::{hash, verify};
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
@@ -6,9 +6,11 @@ use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 use std::env;
 use types::{
-    LoginRequest, LoginResponse, LogoutRequest, LogoutResponse, RefreshTokenRequest,
+    CreateApiKeyRequest, CreateApiKeyResponse, LoginRequest, LoginResponse, LogoutRequest, LogoutResponse, RefreshTokenRequest,
     RefreshTokenResponse, RegisterRequest, RegisterResponse,
 };
+use utils::apikey;
+use utils::auth::AuthUser;
 use uuid::Uuid;
 
 pub fn init(cfg: &mut web::ServiceConfig) {
@@ -17,7 +19,10 @@ pub fn init(cfg: &mut web::ServiceConfig) {
             .service(register)
             .service(login)
             .service(refresh)
-            .service(logout),
+            .service(logout)
+            .service(create_api_key)
+            .service(list_api_keys)
+            .service(revoke_api_key),
     );
 }
 
@@ -205,4 +210,91 @@ async fn logout(req: web::Json<LogoutRequest>, redis_pool: web::Data<RedisPool>)
 
     let response = LogoutResponse { ok: true };
     HttpResponse::Ok().json(response)
+}
+
+fn encryption_key() -> Option<[u8; 32]> {
+    let raw = env::var("API_KEY_ENCRYPTION_KEY").ok()?;
+    match apikey::parse_encryption_key(&raw) {
+        Ok(k) => Some(k),
+        Err(_) => {
+            eprintln!("API_KEY_ENCRYPTION_KEY must be 64 hex chars (32 bytes)");
+            None
+        }
+    }
+}
+
+#[post("/api-keys")]
+async fn create_api_key(
+    auth: AuthUser,
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateApiKeyRequest>,
+) -> impl Responder {
+    let Some(enc_key) = encryption_key() else {
+        return HttpResponse::InternalServerError().body("api keys are not configured");
+    };
+
+    let label = body.label.as_deref().map(str::trim).filter(|l| !l.is_empty());
+    if label.is_some_and(|l| l.len() > 64) {
+        return HttpResponse::BadRequest().body("label too long (max 64)");
+    }
+
+    match db::api_keys::count_active(&pool, auth.0).await {
+        Ok(n) if n >= db::api_keys::MAX_KEYS_PER_USER => {
+            return HttpResponse::BadRequest().body("api key limit reached, revoke one first");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Failed to count api keys: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+
+    let (key, secret) = apikey::generate_key_pair();
+    let (ciphertext, nonce) = match apikey::encrypt_secret(&enc_key, &secret) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to encrypt api secret: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    match db::api_keys::create_api_key(&pool, auth.0, &key, &ciphertext, &nonce, label).await {
+        Ok(info) => HttpResponse::Ok().json(CreateApiKeyResponse {
+            key: info.key,
+            secret,
+            label: info.label,
+            created_at: info.created_at,
+        }),
+        Err(e) => {
+            eprintln!("Failed to store api key: {e:?}");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api-keys")]
+async fn list_api_keys(auth: AuthUser, pool: web::Data<PgPool>) -> impl Responder {
+    match db::api_keys::list_api_keys(&pool, auth.0).await {
+        Ok(keys) => HttpResponse::Ok().json(keys),
+        Err(e) => {
+            eprintln!("Failed to list api keys: {e:?}");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[delete("/api-keys/{key}")]
+async fn revoke_api_key(
+    auth: AuthUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+) -> impl Responder {
+    match db::api_keys::revoke_api_key(&pool, auth.0, &path).await {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
+        Ok(false) => HttpResponse::NotFound().body("api key not found"),
+        Err(e) => {
+            eprintln!("Failed to revoke api key: {e:?}");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }

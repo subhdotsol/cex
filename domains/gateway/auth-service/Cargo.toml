@@ -10,6 +10,7 @@ uuid.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 dotenvy = "0.15"

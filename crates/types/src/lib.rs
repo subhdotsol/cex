@@ -159,3 +159,17 @@ pub struct OrderCancelResponse {
     pub order_id: Uuid,
     pub status: OrderStatus,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateApiKeyRequest {
+    pub label: Option<String>,
+}
+
+/// Returned once on creation. The secret can never be retrieved again.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateApiKeyResponse {
+    pub key: String,
+    pub secret: String,
+    pub label: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
