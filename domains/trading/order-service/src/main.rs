@@ -19,6 +19,7 @@ async fn main() -> std::io::Result<()> {
     println!("Starting order-service on 127.0.0.1:8081");
     HttpServer::new(move || {
         App::new()
+            .wrap(actix_web::middleware::from_fn(utils::auth::api_key_middleware))
             .app_data(web::Data::new(pg_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
             .app_data(web::Data::new(kafka_producer.clone()))
