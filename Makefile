@@ -19,6 +19,9 @@ matching:
 settlement:
 	cargo run -p settlement-service
 
+ws:
+	cargo run -p ws-gateway
+
 cex: docker-up
 	@echo "Starting services..."
 	make auth & \
@@ -26,6 +29,7 @@ cex: docker-up
 	make wallet & \
 	make matching & \
 	make settlement & \
+	make ws & \
 	wait
 
 topics:
