@@ -4,8 +4,13 @@
 // through a tokio broadcast channel; each session forwards only the channels it subscribed to.
 // Gateways are stateless, so they scale horizontally behind a load balancer.
 //
+// Connect:  ws://host:8085/ws                 public channels only
+//           ws://host:8085/ws?token=<jwt>     + private `balance` and `orders` channels
+//           (or `Authorization: Bearer <jwt>` for non-browser clients)
+//
 // Client -> server:
 //   {"op":"subscribe","channel":"depth:BTC-USDT"}
+//   {"op":"subscribe","channel":"balance"}
 //   {"op":"unsubscribe","channel":"trades:BTC-USDT"}
 //
 // Server -> client:
@@ -58,14 +63,39 @@ async fn relay_redis(redis_url: String, tx: broadcast::Sender<Event>) {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct WsQuery {
+    token: Option<String>,
+}
+
 #[get("/ws")]
 async fn ws(
     req: HttpRequest,
     body: web::Payload,
+    query: web::Query<WsQuery>,
     hub: web::Data<Hub>,
 ) -> Result<HttpResponse, actix_web::Error> {
+    let header_token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(str::to_owned);
+
+    // Reject bad credentials before upgrading; no credentials = anonymous session.
+    let user = match query.token.clone().or(header_token) {
+        Some(token) => {
+            let secret = env::var("TOKEN_SECRET").expect("TOKEN_SECRET must be set");
+            match utils::verify_token(&token, &secret) {
+                Ok(claims) => Some(session::SessionUser { id: claims.sub, expires_at: claims.exp }),
+                Err(_) => return Ok(HttpResponse::Unauthorized().body("Invalid or expired token")),
+            }
+        }
+        None => None,
+    };
+
     let (response, session, stream) = actix_ws::handle(&req, body)?;
-    actix_web::rt::spawn(session::run(session, stream, hub.into_inner()));
+    actix_web::rt::spawn(session::run(session, stream, hub.into_inner(), user));
     Ok(response)
 }
 
