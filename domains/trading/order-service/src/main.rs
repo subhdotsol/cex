@@ -20,6 +20,8 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .wrap(actix_web::middleware::from_fn(utils::auth::api_key_middleware))
+            .wrap(actix_web::middleware::from_fn(utils::ratelimit::rate_limit_middleware))
+            .app_data(web::Data::new(utils::ratelimit::RateLimit::new("orders", 20, 1)))
             .app_data(web::Data::new(pg_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
             .app_data(web::Data::new(kafka_producer.clone()))

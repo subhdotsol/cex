@@ -3061,6 +3061,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "db",
+ "deadpool-redis",
  "hex",
  "hmac",
  "jsonwebtoken",

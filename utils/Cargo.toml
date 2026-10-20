@@ -17,3 +17,4 @@ rand = "0.8"
 hex = "0.4"
 sqlx.workspace = true
 db = { path = "../crates/db" }
+deadpool-redis.workspace = true

@@ -17,6 +17,8 @@ async fn main() -> std::io::Result<()> {
     println!("Starting auth-service on 127.0.0.1:8080");
     HttpServer::new(move || {
         App::new()
+            .wrap(actix_web::middleware::from_fn(utils::ratelimit::rate_limit_middleware))
+            .app_data(web::Data::new(utils::ratelimit::RateLimit::new("auth", 20, 60)))
             .app_data(web::Data::new(pg_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
             .configure(routes::init)
