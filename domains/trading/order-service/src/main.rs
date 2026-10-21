@@ -26,6 +26,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(redis_pool.clone()))
             .app_data(web::Data::new(kafka_producer.clone()))
             .app_data(risk_config.clone())
+            .configure(order_service::market::init)
             .configure(order_service::routes::init)
     })
     .bind(("127.0.0.1", 8081))?
