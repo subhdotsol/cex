@@ -7,9 +7,7 @@
 // Offsets are committed only after the Postgres transaction commits (at-least-once),
 // and every handler is idempotent so redelivery is safe.
 
-mod accounting;
-mod notify;
-mod settle;
+use settlement_service::{notify, settle};
 
 use futures::StreamExt;
 use kafka::events::ENGINE_EVENTS;

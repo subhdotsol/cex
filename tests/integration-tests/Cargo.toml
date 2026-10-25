@@ -18,3 +18,6 @@ redis-client = { path = "../../crates/redis-client" }
 types = { path = "../../crates/types" }
 # Note: We'll test auth-service by importing its routes if we make them accessible
 auth-service = { path = "../../domains/gateway/auth-service" }
+settlement-service = { path = "../../domains/trading/settlement-service" }
+kafka = { path = "../../crates/kafka" }
+rust_decimal.workspace = true
