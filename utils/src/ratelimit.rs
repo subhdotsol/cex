@@ -41,10 +41,10 @@ fn identity(req: &ServiceRequest) -> String {
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "));
-    if let (Some(token), Ok(secret)) = (bearer, std::env::var("TOKEN_SECRET")) {
-        if let Ok(claims) = crate::jwt::verify_token(token, &secret) {
-            return format!("user:{}", claims.sub);
-        }
+    if let (Some(token), Ok(secret)) = (bearer, std::env::var("TOKEN_SECRET"))
+        && let Ok(claims) = crate::jwt::verify_token(token, &secret)
+    {
+        return format!("user:{}", claims.sub);
     }
     let ip = req
         .connection_info()

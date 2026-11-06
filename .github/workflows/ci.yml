@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://cex_user:cex_password@localhost:5432/cex_db
+  REDIS_URL: redis://127.0.0.1:6379
+  TOKEN_SECRET: ci-token-secret
+  API_KEY_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex_user
+          POSTGRES_PASSWORD: cex_password
+          POSTGRES_DB: cex_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cex_user"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install build deps for librdkafka
+        run: sudo apt-get update && sudo apt-get install -y cmake libsasl2-dev libssl-dev postgresql-client
+
+      # sqlx::query! checks queries against the database at compile time,
+      # so the schema has to exist before building.
+      - name: Apply migrations
+        run: |
+          for f in crates/db/migrations/*.sql; do
+            echo "applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Tests
+        run: cargo test --workspace

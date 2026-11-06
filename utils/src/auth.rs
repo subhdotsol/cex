@@ -66,26 +66,6 @@ impl FromRequest for AuthUser {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bearer_parsing() {
-        let secret = "test-secret";
-        let user = Uuid::new_v4();
-        let token = crate::jwt::generate_access_token(user, secret).unwrap().0;
-
-        assert_eq!(user_from_bearer(Some(&format!("Bearer {token}")), secret).unwrap(), user);
-        assert!(matches!(user_from_bearer(None, secret), Err(AuthError::MissingHeader)));
-        assert!(matches!(user_from_bearer(Some(&token), secret), Err(AuthError::BadFormat)));
-        assert!(matches!(
-            user_from_bearer(Some(&format!("Bearer {token}")), "other"),
-            Err(AuthError::InvalidToken)
-        ));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // API key (HMAC) authentication middleware
 // ---------------------------------------------------------------------------
@@ -178,4 +158,24 @@ pub async fn api_key_middleware(
     let _ = db::api_keys::touch_last_used(&pool, &key).await;
 
     next.call(req).await.map(ServiceResponse::map_into_left_body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bearer_parsing() {
+        let secret = "test-secret";
+        let user = Uuid::new_v4();
+        let token = crate::jwt::generate_access_token(user, secret).unwrap().0;
+
+        assert_eq!(user_from_bearer(Some(&format!("Bearer {token}")), secret).unwrap(), user);
+        assert!(matches!(user_from_bearer(None, secret), Err(AuthError::MissingHeader)));
+        assert!(matches!(user_from_bearer(Some(&token), secret), Err(AuthError::BadFormat)));
+        assert!(matches!(
+            user_from_bearer(Some(&format!("Bearer {token}")), "other"),
+            Err(AuthError::InvalidToken)
+        ));
+    }
 }

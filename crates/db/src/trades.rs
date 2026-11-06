@@ -38,7 +38,7 @@ pub async fn insert_trade(conn: &mut PgConnection, t: &Trade) -> Result<bool, sq
     .bind(t.taker_order_id)
     .bind(t.maker_user_id)
     .bind(t.taker_user_id)
-    .bind(&t.taker_side)
+    .bind(t.taker_side)
     .bind(t.executed_at)
     .execute(conn)
     .await?;
