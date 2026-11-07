@@ -15,6 +15,90 @@ The system is built around deterministic processing, minimal latency in the matc
 ## CEX API endpoints
 [api-endpoints](https://subhisgreat.notion.site/CEX-api-endpoints-33917f1447c180e8af7ffc0fc620f9b5)
 
+## Running locally
+
+```bash
+cp .env.example .env            # set TOKEN_SECRET and API_KEY_ENCRYPTION_KEY (openssl rand -hex 32)
+make docker-up                  # postgres, redis, kafka
+make migrate                    # sqlx migrate run
+make topics                     # create kafka topics (orders.commands, engine.events)
+make cex                        # start every service
+cargo test --workspace          # unit + integration tests (needs postgres + redis up)
+```
+
+| Service | Port | Responsibility |
+|---|---|---|
+| auth-service | 8080 | register / login / refresh / logout, API key management |
+| order-service | 8081 | place / get / list / cancel orders, trade history, candles |
+| wallet-service | 8082 | mock deposit / withdraw, balances |
+| matching-engine | 8083 | in-memory order books, depth / recent trades / ticker |
+| settlement-service | - | applies fills to Postgres, releases locked funds |
+| ws-gateway | 8085 | realtime depth, trades, balances and order updates |
+| risk-engine | (library) | pre-trade checks used by order-service |
+
+### Order lifecycle
+
+1. `POST /orders` -> risk engine validates pair / tick / lot / notional / open-order cap and computes the
+   funds to reserve (MARKET buys are priced from the live book + 5% buffer).
+2. Funds are locked and the order inserted in **one Postgres transaction** (`balances.locked`, `orders.locked_remaining`).
+3. The order is published to `orders.commands` (keyed by pair, cancels share the topic so they can't overtake the order).
+4. The matching engine matches it and emits `TRADE` / `ORDER_CLOSED` events to `engine.events`.
+5. The settlement service records the trade, updates both orders, moves funds buyer <-> seller,
+   refunds unused reservations (price improvement, cancelled / expired remainder) and writes `ledger_entries`.
+   Trade ids are deterministic and settlement is idempotent, so redelivery is safe.
+6. Redis is refreshed and `balance:{user}`, `orders:{user}`, `trades:{pair}`, `depth:{pair}` are published
+   for the websocket gateway.
+
+The matching engine keeps books in memory and rebuilds them on startup by replaying `orders.commands`.
+
+### Extra endpoints
+
+```
+GET    /wallet/balances                                  (auth)
+GET    /trades?pair=BTC-USDT&limit=50                    (auth) own fills, maker / taker
+GET    /market/candles?pair=BTC-USDT&interval=1m&limit=100   1m 5m 15m 1h 4h 1d
+POST   /auth/api-keys        {"label": "my bot"}         (auth) secret is returned once
+GET    /auth/api-keys                                    (auth)
+DELETE /auth/api-keys/{key}                              (auth)
+```
+
+Rate limits (per API key / user / IP): orders 20 req/s, wallet 10 req/s, auth 20 req/min.
+
+### Bot authentication (API keys)
+
+```
+X-API-KEY:   nxs_live_...
+X-TIMESTAMP: <unix seconds, within 30s of server time>
+X-SIGNATURE: hex(HMAC_SHA256(secret, timestamp + METHOD + path_and_query + body))
+```
+
+```python
+ts = str(int(time.time()))
+sig = hmac.new(secret.encode(), (ts + "POST" + "/orders" + body).encode(), hashlib.sha256).hexdigest()
+```
+
+Secrets are stored AES-256-GCM encrypted (they must be recoverable to verify HMACs) and compared in constant time.
+
+### Websocket
+
+```
+ws://localhost:8085/ws                 public channels
+ws://localhost:8085/ws?token=<jwt>     + private channels
+
+-> {"op":"subscribe","channel":"depth:BTC-USDT"}     snapshot first, then every book change
+-> {"op":"subscribe","channel":"trades:BTC-USDT"}
+-> {"op":"subscribe","channel":"balance"}            private
+-> {"op":"subscribe","channel":"orders"}             private
+<- {"channel":"depth:BTC-USDT","data":{...}}
+```
+
+### Status
+
+Done: auth, API keys, orders, risk checks, matching, settlement, balances + ledger, mock wallet,
+websocket gateway, rate limiting, candles, CI.
+Planned: notification service (email / push), web UI, Kubernetes / Helm, observability stack,
+fees, real chain deposits and withdrawals, matching engine snapshots (replay currently starts from offset 0).
+
 ### Client Layer
 A web user interface built with Next.js interacts with the backend through a secured API gateway. All requests pass through authentication and rate limiting before entering internal services.
 
